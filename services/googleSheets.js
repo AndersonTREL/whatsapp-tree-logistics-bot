@@ -10,10 +10,22 @@ class GoogleSheetsService {
 
   async authenticate() {
     try {
-      const auth = new google.auth.GoogleAuth({
-        keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
+      let auth;
+      
+      // Check if we have JSON credentials from environment variable
+      if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+        const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+        auth = new google.auth.GoogleAuth({
+          credentials: credentials,
+          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+      } else {
+        // Fallback to file-based credentials
+        auth = new google.auth.GoogleAuth({
+          keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+      }
 
       const client = await auth.getClient();
       this.sheets = google.sheets({ version: 'v4', auth: client });
