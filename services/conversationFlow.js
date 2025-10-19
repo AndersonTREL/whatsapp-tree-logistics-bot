@@ -2,6 +2,7 @@
 class ConversationFlow {
   constructor() {
     this.flows = new Map();
+    this.userInfo = new Map(); // Store user information
     this.flowExpiry = 30 * 60 * 1000; // 30 minutes
   }
 
@@ -88,6 +89,26 @@ class ConversationFlow {
       return Date.now() - flow.lastActivity;
     }
     return null;
+  }
+
+  // User info management
+  storeUserInfo(phoneNumber, userData) {
+    this.userInfo.set(phoneNumber, {
+      ...userData,
+      storedAt: Date.now()
+    });
+    console.log(`👤 Stored user info for ${phoneNumber}:`, userData);
+  }
+
+  getUserInfo(phoneNumber) {
+    return this.userInfo.get(phoneNumber);
+  }
+
+  clearUserInfo(phoneNumber) {
+    if (this.userInfo.has(phoneNumber)) {
+      this.userInfo.delete(phoneNumber);
+      console.log(`🧹 Cleared user info for ${phoneNumber}`);
+    }
   }
 }
 

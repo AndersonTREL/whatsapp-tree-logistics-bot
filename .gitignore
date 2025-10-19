@@ -1,24 +1,19 @@
 # Dependencies
 node_modules/
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Environment variables
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.production
 
 # Logs
 *.log
-logs/
 server.log
 ngrok.log
 
 # Runtime data
-pids/
+pids
 *.pid
 *.seed
 *.pid.lock
@@ -30,6 +25,7 @@ coverage/
 .nyc_output
 
 # Dependency directories
+node_modules/
 jspm_packages/
 
 # Optional npm cache directory
@@ -69,6 +65,9 @@ jspm_packages/
 # DynamoDB Local files
 .dynamodb/
 
+# TernJS port file
+.tern-port
+
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -77,19 +76,3 @@ jspm_packages/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Credentials
-credentials/
-*.json
-google-credentials.json
-
-# Temporary files
-tmp/
-temp/
