@@ -23,10 +23,9 @@ The Tree Logistics WhatsApp Bot is designed to streamline driver support request
 ### Step 1: Initial Contact
 When a driver sends any message to `+4915888725850`, the bot responds with:
 ```
-Welcome to Tree Logistics Support! 🌳
-Submit your request anytime — our team is ready to assist you.
+🌳 Welcome to Tree Logistics Office Support! 
 
-Please provide your first name, last name, and the station where you work to get started.
+We are glad that you reached out! To get started, please provide your first name, last name, and the station where you work (DBE2, DBE3).
 ```
 
 ### Step 2: Information Collection
@@ -37,9 +36,11 @@ John Smith DBE3
 
 The bot parses this information and responds:
 ```
-✅ Perfect! John Smith from DBE3 📍
+---------
+✅ Perfect! John Smith, from DBE3 📍
 
-Now, please tell me what you need help with. Describe your request or question:
+Now, please tell us what you need help with. Describe your request or question in as much detail as possible:
+---------
 ```
 
 ### Step 3: Request Submission
@@ -55,7 +56,7 @@ The bot automatically:
 - Sends confirmation to the driver:
 
 ```
-Thank you for reaching out John Smith! Your request has been submitted successfully. Our team will review it and contact you soon.
+💚 Thank you John Smith! Your request has been submitted successfully and our team will review it and contact you soon. Have a great day! 
 
 🆔 Request ID: REQ-1734567890-5
 ```
@@ -177,18 +178,19 @@ PORT=3000
 
 ```
 Driver: Hi
-Bot: Welcome to Tree Logistics Support! 🌳
-     Submit your request anytime — our team is ready to assist you.
+Bot: 🌳 Welcome to Tree Logistics Office Support! 
      
-     Please provide your first name, last name, and the station where you work to get started.
+     We are glad that you reached out! To get started, please provide your first name, last name, and the station where you work (DBE2, DBE3).
 
 Driver: Maria Garcia DBE2
-Bot: ✅ Perfect! Maria Garcia from DBE2 📍
+Bot: ---------
+     ✅ Perfect! Maria Garcia, from DBE2 📍
      
-     Now, please tell me what you need help with. Describe your request or question:
+     Now, please tell us what you need help with. Describe your request or question in as much detail as possible:
+     ---------
 
 Driver: My delivery truck needs maintenance
-Bot: Thank you for reaching out Maria Garcia! Your request has been submitted successfully. Our team will review it and contact you soon.
+Bot: 💚 Thank you Maria Garcia! Your request has been submitted successfully and our team will review it and contact you soon. Have a great day! 
      
      🆔 Request ID: REQ-1734567890-6
 ```

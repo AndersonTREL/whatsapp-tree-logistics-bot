@@ -51,7 +51,9 @@ async function startDataCollectionFlow(from, profileName) {
     flow: 'data_collection'
   });
   
-  return `Welcome to Tree Logistics Support! 🌳\nSubmit your request anytime — our team is ready to assist you.\n\nPlease provide your first name, last name, and the station where you work to get started.`;
+  return `🌳 Welcome to Tree Logistics Office Support! 
+
+We are glad that you reached out! To get started, please provide your first name, last name, and the station where you work (DBE2, DBE3).`;
 }
 
 // Handle data collection - parse the single message for all 3 pieces of info
@@ -61,7 +63,13 @@ async function handleDataCollection(message, from, data) {
     const parsedData = parseDriverInfo(message);
     
     if (!parsedData.isValid) {
-      return `❌ Please provide the information in the correct format:\n\n📝 **First Name**\n📝 **Last Name**\n🏢 **Station** (DBE3 or DBE2)\n\nPlease try again.`;
+      return `❌ Please provide the information in the correct format:
+
+📝 **First Name**
+📝 **Last Name** 
+🏢 **Station** (DBE3 or DBE2)
+
+Please try again.`;
     }
     
     // Now ask for their request/question
@@ -73,7 +81,11 @@ async function handleDataCollection(message, from, data) {
       step: 'request_collection'
     });
     
-    return `✅ Perfect! ${parsedData.firstName} ${parsedData.lastName} from ${parsedData.station} 📍\n\nNow, please tell me what you need help with. Describe your request or question:`;
+    return `---------
+✅ Perfect! ${parsedData.firstName} ${parsedData.lastName}, from ${parsedData.station} 📍
+
+Now, please tell us what you need help with. Describe your request or question in as much detail as possible:
+---------`;
     
   } catch (error) {
     console.error('Error parsing driver info:', error);
@@ -126,7 +138,9 @@ async function handleRequestCollection(message, from, data) {
   
   const requestId = `REQ-${Date.now()}`;
   const fullName = `${data.firstName} ${data.lastName}`;
-  return `Thank you for reaching out ${fullName}! Your request has been submitted successfully. Our team will review it and contact you soon.\n\n🆔 Request ID: ${requestId}`;
+  return `💚 Thank you ${fullName}! Your request has been submitted successfully and our team will review it and contact you soon. Have a great day! 
+
+🆔 Request ID: ${requestId}`;
 }
 
 // Updated handleActiveFlow to handle request collection
