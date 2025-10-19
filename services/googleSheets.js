@@ -64,7 +64,7 @@ class GoogleSheetsService {
                     title: this.sheetName,
                     gridProperties: {
                       rowCount: 1000,
-                      columnCount: 6
+                      columnCount: 7
                     }
                   }
                 }
@@ -76,11 +76,11 @@ class GoogleSheetsService {
         // Add headers
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: this.spreadsheetId,
-          range: `${this.sheetName}!A1:F1`,
+          range: `${this.sheetName}!A1:G1`,
           valueInputOption: 'RAW',
           resource: {
             values: [
-              ['Timestamp', 'First Name', 'Last Name', 'Station', 'Request/Question', 'Request ID']
+              ['Timestamp', 'First Name', 'Last Name', 'Station', 'Request/Question', 'Request ID', 'Phone Number']
             ]
           }
         });
@@ -108,7 +108,7 @@ class GoogleSheetsService {
       const rowCount = currentData.data.values ? currentData.data.values.length : 1;
       const rowId = `REQ-${Date.now()}-${rowCount}`;
 
-      // Simplified structure with only 5 required fields + Request ID
+      // Structure with 6 required fields + Request ID + Phone Number
       const values = [
         [
           requestData.timestamp,           // A: Timestamp
@@ -116,13 +116,14 @@ class GoogleSheetsService {
           requestData.lastName,            // C: Last Name
           requestData.station,             // D: Station
           requestData.request,             // E: Request/Question
-          rowId                            // F: Request ID
+          rowId,                           // F: Request ID
+          requestData.phoneNumber          // G: Phone Number
         ],
       ];
 
       const response = await this.sheets.spreadsheets.values.append({
         spreadsheetId: this.spreadsheetId,
-        range: `${this.sheetName}!A:F`,
+        range: `${this.sheetName}!A:G`,
         valueInputOption: 'RAW',
         resource: { values },
       });
@@ -143,7 +144,7 @@ class GoogleSheetsService {
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
-        range: `${this.sheetName}!A:F`,
+        range: `${this.sheetName}!A:G`,
       });
 
       const rows = response.data.values || [];
@@ -160,7 +161,8 @@ class GoogleSheetsService {
         lastName: row[2] || '',
         station: row[3] || '',
         request: row[4] || '',
-        rowId: row[5] || ''
+        rowId: row[5] || '',
+        phoneNumber: row[6] || ''
       }));
 
       return requests;

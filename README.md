@@ -62,7 +62,7 @@ Thank you for reaching out John Smith! Your request has been submitted successfu
 
 ## 📊 Data Structure
 
-The bot collects exactly **6 pieces of information** for each request:
+The bot collects exactly **7 pieces of information** for each request:
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -72,6 +72,7 @@ The bot collects exactly **6 pieces of information** for each request:
 | **Station** | Work location (DBE3 or DBE2) | `DBE3` |
 | **Request/Question** | What they need help with | `I need a new scanner` |
 | **Request ID** | Unique identifier | `REQ-1734567890-5` |
+| **Phone Number** | Driver's WhatsApp number | `+4917616626841` |
 
 ## 🏗️ Technical Architecture
 
