@@ -1,0 +1,15 @@
+Backup Created: December 1, 2025 at 14:42:25
+
+This backup contains all important project files before making changes.
+
+Files Backed Up:
+- server.js (main server file)
+- services/conversationFlow.js (conversation flow management)
+- services/googleSheets.js (Google Sheets integration)
+- package.json (dependencies)
+- env.example (environment variables example)
+- railway.json (Railway deployment config)
+- README.md (project documentation)
+
+You can restore any file by copying it back from this backup directory.
+

@@ -1,6 +1,5 @@
 const { google } = require('googleapis');
 const path = require('path');
-const fs = require('fs');
 
 class GoogleSheetsService {
   constructor() {
@@ -8,7 +7,7 @@ class GoogleSheetsService {
     // Use environment variable if available, otherwise fallback to hardcoded value
     this.spreadsheetId = process.env.GOOGLE_SHEET_ID || '1DwBYrHLGCpFpqbU6r5DUL6fyzJS8urN87tFgKAmJssQ';
     this.sheetName = 'Driver Requests'; // Name of the sheet tab
-
+    
     console.log(`📊 Google Sheets Service initialized - Sheet ID: ${this.spreadsheetId}, Sheet Name: ${this.sheetName}`);
   }
 
@@ -16,7 +15,7 @@ class GoogleSheetsService {
     try {
       console.log('🔐 Authenticating with Google Sheets API...');
       let auth;
-
+      
       // Check if we have JSON credentials from environment variable
       if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
         console.log('📋 Using credentials from GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable');
@@ -46,7 +45,7 @@ class GoogleSheetsService {
       const client = await auth.getClient();
       this.sheets = google.sheets({ version: 'v4', auth: client });
       console.log('✅ Successfully authenticated with Google Sheets API');
-
+      
       return this.sheets;
     } catch (error) {
       console.error('❌ Error authenticating with Google Sheets:', error.message);
@@ -117,125 +116,70 @@ class GoogleSheetsService {
     }
   }
 
-
-
-  async backupRequest(requestData) {
-    try {
-      const backupDir = path.join(__dirname, '../backups');
-      if (!fs.existsSync(backupDir)) {
-        fs.mkdirSync(backupDir, { recursive: true });
-      }
-
-      const backupFile = path.join(backupDir, 'failed_requests.json');
-      let backups = [];
-
-      if (fs.existsSync(backupFile)) {
-        try {
-          const content = fs.readFileSync(backupFile, 'utf8');
-          backups = JSON.parse(content);
-        } catch (e) {
-          console.error('Error reading backup file, starting fresh');
-        }
-      }
-
-      // Add status to track it hasn't been synced
-      requestData._syncStatus = 'PENDING';
-      requestData._backupTimestamp = new Date().toISOString();
-
-      backups.push(requestData);
-
-      fs.writeFileSync(backupFile, JSON.stringify(backups, null, 2));
-      console.log(`💾 Request backed up locally to ${backupFile}`);
-      return true;
-    } catch (error) {
-      console.error('❌ CRITICAL: Failed to backup request locally:', error);
-      return false;
-    }
-  }
-
   async addRequest(requestData) {
-    const MAX_RETRIES = 3;
-    let attempt = 0;
+    try {
+      console.log(`📊 Adding request to Google Sheets - Sheet ID: ${this.spreadsheetId}, Sheet Name: ${this.sheetName}`);
+      
+      await this.ensureSheetExists();
 
-    while (attempt < MAX_RETRIES) {
-      try {
-        console.log(`📊 Adding request to Google Sheets (Attempt ${attempt + 1}/${MAX_RETRIES})`);
+      // Get current row count to generate Row ID
+      console.log('📊 Getting current row count...');
+      const currentData = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `${this.sheetName}!A:A`,
+      });
 
-        await this.ensureSheetExists();
+      const rowCount = currentData.data.values ? currentData.data.values.length : 1;
+      const rowId = `REQ-${Date.now()}-${rowCount}`;
+      console.log(`📊 Current row count: ${rowCount}, Generated Row ID: ${rowId}`);
 
-        // Get current row count to generate Row ID if not provided
-        if (!requestData.rowId) {
-          console.log('📊 Getting current row count...');
-          const currentData = await this.sheets.spreadsheets.values.get({
-            spreadsheetId: this.spreadsheetId,
-            range: `${this.sheetName}!A:A`,
-          });
+      // Structure with 6 required fields + Request ID + Phone Number
+      const values = [
+        [
+          requestData.timestamp,           // A: Timestamp
+          requestData.firstName,           // B: First Name
+          requestData.lastName,            // C: Last Name
+          requestData.station,             // D: Station
+          requestData.request,             // E: Request/Question
+          rowId,                           // F: Request ID
+          requestData.phoneNumber          // G: Phone Number
+        ],
+      ];
 
-          const rowCount = currentData.data.values ? currentData.data.values.length : 1;
-          requestData.rowId = `REQ-${Date.now()}-${rowCount}`;
-        }
+      console.log(`📝 Appending data to sheet "${this.sheetName}"...`);
+      const response = await this.sheets.spreadsheets.values.append({
+        spreadsheetId: this.spreadsheetId,
+        range: `${this.sheetName}!A:G`,
+        valueInputOption: 'RAW',
+        resource: { values },
+      });
 
-        // Structure with 6 required fields + Request ID + Phone Number
-        const values = [
-          [
-            requestData.timestamp,           // A: Timestamp
-            requestData.firstName,           // B: First Name
-            requestData.lastName,            // C: Last Name
-            requestData.station,             // D: Station
-            requestData.request,             // E: Request/Question
-            requestData.rowId,               // F: Request ID
-            requestData.phoneNumber          // G: Phone Number
-          ],
-        ];
-
-        console.log(`📝 Appending data to sheet "${this.sheetName}"...`);
-        const response = await this.sheets.spreadsheets.values.append({
-          spreadsheetId: this.spreadsheetId,
-          range: `${this.sheetName}!A:G`,
-          valueInputOption: 'RAW',
-          resource: { values },
-        });
-
-        console.log('✅ Request successfully added to Google Sheets');
-        console.log('📊 Response details:', {
-          spreadsheetId: response.data.spreadsheetId,
-          updatedRange: response.data.updates?.updatedRange,
-          updatedRows: response.data.updates?.updatedRows
-        });
-
-        return { success: true, rowId: requestData.rowId };
-
-      } catch (error) {
-        attempt++;
-        console.error(`❌ Error adding request (Attempt ${attempt}/${MAX_RETRIES}):`, error.message);
-
-        // If it's the last attempt, try to backup
-        if (attempt >= MAX_RETRIES) {
-          console.error('❌ All retries failed. Attempting local backup...');
-
-          const backedUp = await this.backupRequest(requestData);
-
-          if (backedUp) {
-            console.log('✅ Request saved to local backup. It is safe but needs to be manually synced later.');
-            // We return success here so the user gets a confirmation message, 
-            // even though it's only saved locally.
-            // You might want to append a note to the returned rowId or structure to indicate this.
-            return {
-              success: true,
-              rowId: requestData.rowId || `REQ-BACKUP-${Date.now()}`,
-              savedLocally: true
-            };
-          }
-
-          // Re-throw if even backup failed
-          throw error;
-        }
-
-        // Wait before retrying (exponential backoff: 1s, 2s, 4s...)
-        const delay = Math.pow(2, attempt) * 1000;
-        console.log(`⏳ Waiting ${delay}ms before next retry...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+      console.log('✅ Request successfully added to Google Sheets');
+      console.log('📊 Response details:', {
+        spreadsheetId: response.data.spreadsheetId,
+        updatedRange: response.data.updates?.updatedRange,
+        updatedRows: response.data.updates?.updatedRows
+      });
+      
+      return { success: true, rowId };
+    } catch (error) {
+      console.error('❌ Error adding request to Google Sheets:');
+      console.error('Error message:', error.message);
+      console.error('Error code:', error.code);
+      console.error('Error details:', error.errors || error.response?.data);
+      
+      // Provide more specific error messages
+      if (error.code === 401) {
+        throw new Error('Authentication failed. Please check your Google credentials.');
+      } else if (error.code === 403) {
+        throw new Error('Permission denied. The service account does not have access to the spreadsheet.');
+      } else if (error.code === 404) {
+        throw new Error(`Spreadsheet or sheet not found. Please check the spreadsheet ID (${this.spreadsheetId}) and sheet name (${this.sheetName}).`);
+      } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        throw new Error('Network error. Cannot reach Google Sheets API. Please check your internet connection.');
       }
+      
+      throw error;
     }
   }
 
@@ -251,7 +195,7 @@ class GoogleSheetsService {
       });
 
       const rows = response.data.values || [];
-
+      
       if (rows.length <= 1) {
         return []; // No data rows, only headers
       }
@@ -279,7 +223,7 @@ class GoogleSheetsService {
   async getRequestsByPhoneNumber(phoneNumber) {
     try {
       const allRequests = await this.getAllRequests();
-      return allRequests.filter(request =>
+      return allRequests.filter(request => 
         request.phoneNumber === phoneNumber
       );
     } catch (error) {
@@ -288,46 +232,19 @@ class GoogleSheetsService {
     }
   }
 
-  /**
-   * Get all unique phone numbers from submitted requests
-   * @returns {Promise<Array<string>>} - Array of unique phone numbers
-   */
-  async getUniquePhoneNumbers() {
-    try {
-      const allRequests = await this.getAllRequests();
-
-      // Extract unique phone numbers
-      const phoneNumbers = new Set();
-
-      allRequests.forEach(request => {
-        if (request.phoneNumber && request.phoneNumber.trim() !== '') {
-          phoneNumbers.add(request.phoneNumber.trim());
-        }
-      });
-
-      const uniquePhones = Array.from(phoneNumbers);
-      console.log(`📱 Found ${uniquePhones.length} unique phone numbers`);
-
-      return uniquePhones;
-    } catch (error) {
-      console.error('Error getting unique phone numbers:', error);
-      return [];
-    }
-  }
-
   // Helper function to aggressively normalize status strings
   normalizeStatusString(status) {
     if (!status) return '';
-
+    
     // Remove all types of whitespace (including non-breaking spaces, tabs, etc.)
     let cleaned = String(status)
       .replace(/[\u00A0\u2000-\u200B\u2028\u2029\u3000]/g, ' ') // Replace various unicode spaces with regular space
       .replace(/\s+/g, ' ') // Replace multiple spaces with single space
       .trim();
-
+    
     // Convert to lowercase for matching
     const lower = cleaned.toLowerCase();
-
+    
     // Comprehensive status mapping (handles all variations)
     const statusMap = {
       'completed': 'Completed',
@@ -352,12 +269,12 @@ class GoogleSheetsService {
       'canceled': 'Cancelled',
       'canceld': 'Cancelled'
     };
-
+    
     // Check if we have a mapping
     if (statusMap[lower]) {
       return statusMap[lower];
     }
-
+    
     // For unknown statuses, capitalize first letter of each word
     return cleaned
       .split(/\s+/)
@@ -426,7 +343,7 @@ class GoogleSheetsService {
       // This is a simplified cleanup - in a real scenario you'd implement
       // more sophisticated duplicate detection logic
       console.log(`📊 Found ${allRequests.length} total requests`);
-
+      
       return {
         success: true,
         totalRows: allRequests.length,
@@ -472,16 +389,16 @@ class GoogleSheetsService {
         const rowNumber = index + 2; // +2 because we start from row 2 (skip header)
         const currentStatus = statusRows[index][0] || '';
         const originalStatus = currentStatus;
-
+        
         // Skip empty statuses
         if (!currentStatus || currentStatus.trim() === '') {
           skippedCount++;
           continue;
         }
-
+        
         // Normalize the status
         const normalizedStatus = this.normalizeStatusString(currentStatus);
-
+        
         // Always update to ensure exact match (removes any hidden characters)
         try {
           await this.sheets.spreadsheets.values.update({
@@ -518,7 +435,7 @@ class GoogleSheetsService {
       console.log(`   - Updated (same value): ${statusRows.length - skippedCount - normalizedCount - errorCount}`);
       console.log(`   - Skipped (empty): ${skippedCount}`);
       console.log(`   - Errors: ${errorCount}`);
-
+      
       // Log some examples of changes
       if (statusChanges.length > 0) {
         console.log('📋 Example changes:');
@@ -654,7 +571,7 @@ class GoogleSheetsService {
       for (let index = 0; index < statusRows.length; index++) {
         const rowNumber = index + 2;
         const currentStatus = statusRows[index][0] || '';
-
+        
         if (!currentStatus || currentStatus.trim() === '') {
           continue;
         }
@@ -757,7 +674,7 @@ class GoogleSheetsService {
         const rowNumber = index + 2;
         const status = row[0] || '';
         const trimmed = String(status).trim();
-
+        
         if (!trimmed) {
           return;
         }
