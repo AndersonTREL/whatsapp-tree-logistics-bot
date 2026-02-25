@@ -171,8 +171,8 @@ function validateRequestText(requestText, retryCount = 0) {
   
   console.log(`[VALIDATION] Validating: "${text}" (retry: ${retryCount})`);
   
-  // After 2 retries, accept the request anyway (don't frustrate users)
-  const MAX_RETRIES = 2;
+  // After 1 retry, accept the request anyway (don't frustrate users)
+  const MAX_RETRIES = 1;
   if (retryCount >= MAX_RETRIES) {
     console.log(`[VALIDATION] Max retries reached, accepting request`);
     return {
@@ -187,9 +187,7 @@ function validateRequestText(requestText, retryCount = 0) {
     return {
       isValid: false,
       reason: 'too_short',
-      message: `📝 Your message is very short. Could you add a bit more detail?
-
-What can we help you with?`
+      message: `📝 Your message is very short. Could you add a bit more detail?\n\nWhat can we help you with?`
     };
   }
 
@@ -197,27 +195,22 @@ What can we help you with?`
   const requestType = detectRequestType(text);
   console.log(`[VALIDATION] Request type detected: ${requestType}`);
   
-  // IBAN Change - just ask for new IBAN number
+  // IBAN Change - ask for IBAN number if not already provided (only on first attempt)
   if (requestType === 'iban_change') {
-    // Check if they already provided an IBAN (format: DE followed by 20 digits, possibly with spaces)
     const ibanPattern = /\b(DE|de)\s*\d{2}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{4}\s*\d{2}\b|\bDE\d{20}\b/i;
     if (!ibanPattern.test(text)) {
+      console.log(`[VALIDATION] IBAN request without IBAN number, asking once`);
       return {
         isValid: false,
         reason: 'iban_missing',
-        message: `📝 To update your IBAN, please provide your new IBAN number.
-
-Example: DE12 5001 0517 0648 4898 90
-
-What's your new IBAN?`
+        message: `📝 To update your IBAN, please also send your new IBAN number.\n\nExample: DE12 5001 0517 0648 4898 90\n\nWhat's your new IBAN? (or send any message again to save your request as-is)`
       };
     }
   }
   
-  // Scanner Request - ask if it still works and provide helpful info
+  // Scanner Request - ask if it still works (only on first attempt)
   if (requestType === 'scanner') {
     console.log(`[VALIDATION] Scanner request detected, checking status...`);
-    // Check if they mentioned it's broken/not working
     const brokenPattern = /\b(broken|not\s+working|doesn't\s+work|stopped|dead|faulty|defective|doesn't\s+turn\s+on|won't\s+work)\b/i;
     const workingPattern = /\b(working|works|fine|ok|okay|good|still\s+works)\b/i;
     
@@ -226,63 +219,47 @@ What's your new IBAN?`
     
     console.log(`[VALIDATION] Scanner - isBroken: ${isBroken}, isWorking: ${isWorking}`);
     
-    // If they didn't specify if it's working or broken, ask them
-    if (!isBroken && !isWorking) {
-      console.log(`[VALIDATION] ❌ REJECTING: Scanner request without status`);
-      return {
-        isValid: false,
-        reason: 'scanner_status',
-        message: `📝 Is your scanner still working, or is it broken?
-
-If it's broken: Please come to the office tomorrow to get a new scanner. We'll have one ready for you.
-
-If it's still working: Let us know what the issue is and we'll help you.`
-      };
-    }
-    
-    // If broken, provide helpful info and accept
+    // If broken, provide helpful info and accept immediately
     if (isBroken) {
       console.log(`[VALIDATION] ✅ Scanner is broken, accepting with helpful info`);
       return {
         isValid: true,
         requestType: 'scanner',
-        helpfulInfo: 'Please come to the office tomorrow to get a new scanner. We\'ll have one ready for you.'
+        helpfulInfo: "Please come to the office tomorrow to get a new scanner. We'll have one ready for you."
       };
     }
     
-    // If working but they still need help, accept it (they'll explain the issue)
-    console.log(`[VALIDATION] ✅ Scanner is working but user needs help, accepting`);
+    // If status unclear, ask once - on next message it will be saved (MAX_RETRIES=1)
+    if (!isWorking) {
+      console.log(`[VALIDATION] Scanner status unclear, asking once`);
+      return {
+        isValid: false,
+        reason: 'scanner_status',
+        message: `📝 Is your scanner still working, or is it broken?\n\nIf it's broken: Please come to the office tomorrow to get a new scanner. We'll have one ready for you.\n\nIf it's still working: Let us know what the issue is and we'll help you.\n\n(Send any message again to save your request as-is)`
+      };
+    }
+    
+    console.log(`[VALIDATION] ✅ Scanner request accepted`);
   }
   
-  // Vacation Request - ask for dates
+  // Vacation Request - ask for dates (only on first attempt)
   if (requestType === 'vacation') {
     console.log(`[VALIDATION] Vacation request detected, checking for dates...`);
-    // Check if dates are mentioned (various date formats)
-    // Look for: dates (DD.MM.YYYY, DD/MM/YYYY, etc.), month names, "from X to Y", "next week", etc.
     const datePattern = /\b(\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}|\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)|next\s+week|this\s+week|from\s+\d|to\s+\d|until|till|from\s+\d{1,2}|december|january|february|march|april|may|june|july|august|september|october|november)\b/i;
-    
-    // Also check for "from X to Y" pattern even without explicit dates
     const fromToPattern = /\b(from|starting|beginning)\s+.+\s+(to|until|till|ending)\s+/i;
     
     const hasDates = datePattern.test(text) || fromToPattern.test(text);
-    console.log(`[VALIDATION] Date pattern match: ${datePattern.test(text)}, FromTo pattern: ${fromToPattern.test(text)}, Has dates: ${hasDates}`);
+    console.log(`[VALIDATION] Has dates: ${hasDates}`);
     
     if (!hasDates) {
-      console.log(`[VALIDATION] ❌ REJECTING: Vacation request without dates`);
+      console.log(`[VALIDATION] Vacation without dates, asking once`);
       return {
         isValid: false,
         reason: 'vacation_dates',
-        message: `📝 To process your vacation request, please provide the dates.
-
-Example:
-• "I need vacation from 15.12.2024 to 22.12.2024"
-• "Vacation from December 15 to December 22"
-• "I need 5 days off starting next Monday"
-
-Which dates do you need vacation?`
+        message: `📝 To help with your vacation request, please include the dates.\n\nExample:\n• "I need vacation from 15.03.2026 to 22.03.2026"\n• "I need 5 days off starting next Monday"\n\nWhich dates do you need? (or send any message again to save your request as-is)`
       };
     }
-    console.log(`[VALIDATION] ✅ Vacation request has dates, accepting`);
+    console.log(`[VALIDATION] ✅ Vacation request accepted`);
   }
 
   // Check for extremely vague phrases with no context (only if not a specific request type)
@@ -291,7 +268,7 @@ Which dates do you need vacation?`
       { pattern: /^(i have|i've got|there is|there's)\s+(a\s+)?problem\.?$/i, example: 'I have a problem with my scanner - it stopped working yesterday' },
       { pattern: /^(i need|i want)\s+help\.?$/i, example: 'I need help changing my IBAN number' },
       { pattern: /^(i have|i've got)\s+(an\s+)?issue\.?$/i, example: 'I have an issue with my delivery route - it shows the wrong address' },
-      { pattern: /^something\s+(is\s+)?wrong\.?$/i, example: 'Something is wrong with my scanner - it won\'t turn on' }
+      { pattern: /^something\s+(is\s+)?wrong\.?$/i, example: "Something is wrong with my scanner - it won't turn on" }
     ];
 
     for (const vague of extremelyVague) {
@@ -299,17 +276,13 @@ Which dates do you need vacation?`
         return {
           isValid: false,
           reason: 'too_vague',
-          message: `📝 Could you tell us a bit more? 
-
-For example: "${vague.example}"
-
-What exactly do you need help with?`
+          message: `📝 Could you tell us a bit more? \n\nFor example: "${vague.example}"\n\nWhat exactly do you need help with?`
         };
       }
     }
   }
 
-  // Request is valid - only reached if all validations passed
+  // Request is valid
   console.log(`[VALIDATION] ✅ All validations passed, request is valid`);
   return {
     isValid: true,
