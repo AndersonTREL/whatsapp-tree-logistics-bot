@@ -719,6 +719,20 @@ app.get('/broadcast/recipients', async (req, res) => {
   }
 });
 
+// Format sheet endpoint - apply professional styling
+app.post('/format-sheet', async (req, res) => {
+  try {
+    const result = await googleSheets.formatSheet();
+    res.json(result);
+  } catch (error) {
+    console.error('Error formatting sheet:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log('='.repeat(50));
