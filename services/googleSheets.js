@@ -204,6 +204,58 @@ class GoogleSheetsService {
           updatedRows: response.data.updates?.updatedRows
         });
 
+        // Apply dropdown data validation to the Status cell (column H) for the new row
+        try {
+          const updatedRange = response.data.updates?.updatedRange || '';
+          // Extract the row number from the updated range (e.g., "Driver Requests!A12:H12" -> 12)
+          const rowMatch = updatedRange.match(/(\d+)$/);
+          if (rowMatch) {
+            const newRowNumber = parseInt(rowMatch[1]) - 1; // 0-indexed for batchUpdate
+
+            // Get the sheet ID
+            const sheetInfo = await this.sheets.spreadsheets.get({
+              spreadsheetId: this.spreadsheetId,
+            });
+            const sheet = sheetInfo.data.sheets.find(s => s.properties.title === this.sheetName);
+            const sheetId = sheet ? sheet.properties.sheetId : 0;
+
+            await this.sheets.spreadsheets.batchUpdate({
+              spreadsheetId: this.spreadsheetId,
+              resource: {
+                requests: [{
+                  setDataValidation: {
+                    range: {
+                      sheetId: sheetId,
+                      startRowIndex: newRowNumber,
+                      endRowIndex: newRowNumber + 1,
+                      startColumnIndex: 7, // Column H (0-indexed)
+                      endColumnIndex: 8
+                    },
+                    rule: {
+                      condition: {
+                        type: 'ONE_OF_LIST',
+                        values: [
+                          { userEnteredValue: 'Review' },
+                          { userEnteredValue: 'In Progress' },
+                          { userEnteredValue: 'Completed' },
+                          { userEnteredValue: 'Not started' },
+                          { userEnteredValue: 'needs to be clarified' }
+                        ]
+                      },
+                      showCustomUi: true,
+                      strict: false
+                    }
+                  }
+                }]
+              }
+            });
+            console.log('✅ Dropdown data validation applied to Status cell');
+          }
+        } catch (validationError) {
+          // Don't fail the whole request if validation setup fails
+          console.warn('⚠️ Could not apply dropdown validation:', validationError.message);
+        }
+
         return { success: true, rowId: requestData.rowId };
 
       } catch (error) {
