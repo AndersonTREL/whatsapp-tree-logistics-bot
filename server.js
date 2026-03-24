@@ -323,10 +323,11 @@ async function handleRequestCollection(message, from, data) {
       console.log(`📤 Returning message to user asking for more info`);
       console.log(`========== REQUEST VALIDATION END ==========\n`);
       
-      // Increment retry count and update flow
+      // Store the original request text and increment retry count
       conversationFlow.updateFlow(from, {
         ...data,
-        requestRetryCount: retryCount + 1
+        requestRetryCount: retryCount + 1,
+        originalRequest: data.originalRequest || requestText  // Save the first message
       });
       
       // Return contextual, helpful message
@@ -343,8 +344,15 @@ async function handleRequestCollection(message, from, data) {
       return `⚠️ There was an error processing your request. Please try again.`;
     }
 
+    // Combine original request + follow-up if this is a retry
+    let fullRequestText = requestText;
+    if (data.originalRequest && data.originalRequest !== requestText) {
+      fullRequestText = `${data.originalRequest} | ${requestText}`;
+      console.log(`📝 Combined request: "${fullRequestText}"`);
+    }
+
     // Request is valid - save it
-    const saveResult = await saveRequest(from, data, requestText);
+    const saveResult = await saveRequest(from, data, fullRequestText);
     
     // Clear the flow only if save was successful
     conversationFlow.clearFlow(from);
