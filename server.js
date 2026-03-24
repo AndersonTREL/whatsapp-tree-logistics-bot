@@ -419,7 +419,7 @@ async function saveRequest(from, data, requestText) {
       phoneNumber: from,
       station: data.station,
       request: requestText,
-      status: 'Review',
+      status: 'To be contacted',
       rowId: `REQ-${Date.now()}`,
     });
     

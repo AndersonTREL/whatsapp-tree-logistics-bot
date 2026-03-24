@@ -185,7 +185,7 @@ class GoogleSheetsService {
             requestData.request,             // E: Request/Question
             requestData.rowId,               // F: Request ID
             requestData.phoneNumber,         // G: Phone Number
-            requestData.status || 'Review'   // H: Status
+            requestData.status || 'To be contacted'   // H: Status
           ],
         ];
 
@@ -235,7 +235,7 @@ class GoogleSheetsService {
                       condition: {
                         type: 'ONE_OF_LIST',
                         values: [
-                          { userEnteredValue: 'Review' },
+                          { userEnteredValue: 'To be contacted' },
                           { userEnteredValue: 'In Progress' },
                           { userEnteredValue: 'Completed' },
                           { userEnteredValue: 'Not started' },
@@ -399,7 +399,7 @@ class GoogleSheetsService {
       'needs to be clarified': 'needs to be clarified',
       'needstobeclarified': 'needs to be clarified',
       'needs clarification': 'needs to be clarified',
-      'review': 'Review',
+      'review': 'To be contacted',
       'pending': 'Pending',
       'cancelled': 'Cancelled',
       'canceled': 'Cancelled',
@@ -953,7 +953,7 @@ class GoogleSheetsService {
             range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 },
             rule: {
               condition: { type: 'ONE_OF_LIST', values: [
-                { userEnteredValue: 'Review' },
+                { userEnteredValue: 'To be contacted' },
                 { userEnteredValue: 'Not started' },
                 { userEnteredValue: 'In Progress' },
                 { userEnteredValue: 'Completed' },
@@ -986,7 +986,7 @@ class GoogleSheetsService {
       const cfRequests = [
         { status: 'Completed', color: statusColors.completed },
         { status: 'In Progress', color: statusColors.inProgress },
-        { status: 'Review', color: statusColors.review },
+        { status: 'To be contacted', color: statusColors.review },
         { status: 'Not started', color: statusColors.notStarted },
         { status: 'needs to be clarified', color: statusColors.clarification }
       ].map((item, index) => ({
@@ -1015,7 +1015,7 @@ class GoogleSheetsService {
           'Header: dark green background, white bold text, frozen',
           'Column widths optimized',
           'Alternating row colors (gray/white banding)',
-          'Status dropdown with Review option for all rows',
+          'Status dropdown with To be contacted option for all rows',
           'Status conditional formatting (green/orange/blue/red/yellow)',
           'Station & Status columns centered',
           'Light borders on all cells'
