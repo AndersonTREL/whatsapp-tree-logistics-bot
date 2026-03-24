@@ -986,7 +986,7 @@ class GoogleSheetsService {
       const cfRequests = [
         { status: 'Completed', color: statusColors.completed },
         { status: 'In Progress', color: statusColors.inProgress },
-        { status: 'To be contacted', color: statusColors.review },
+        { status: 'To be contacted', color: { red: 1, green: 0.8, blue: 0.4 } },
         { status: 'Not started', color: statusColors.notStarted },
         { status: 'needs to be clarified', color: statusColors.clarification }
       ].map((item, index) => ({
