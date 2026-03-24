@@ -1057,6 +1057,33 @@ class GoogleSheetsService {
             innerHorizontal: { style: 'SOLID', width: 1, color: { red: 0.85, green: 0.85, blue: 0.85 } },
             innerVertical: { style: 'SOLID', width: 1, color: { red: 0.85, green: 0.85, blue: 0.85 } }
           }
+        },
+
+        // 10. Data validation (dropdown) for entire Status column
+        {
+          setDataValidation: {
+            range: {
+              sheetId: sheetId,
+              startRowIndex: 1,
+              endRowIndex: 1000,
+              startColumnIndex: 7, // Column H
+              endColumnIndex: 8
+            },
+            rule: {
+              condition: {
+                type: 'ONE_OF_LIST',
+                values: [
+                  { userEnteredValue: 'Review' },
+                  { userEnteredValue: 'Not started' },
+                  { userEnteredValue: 'In Progress' },
+                  { userEnteredValue: 'Completed' },
+                  { userEnteredValue: 'needs to be clarified' }
+                ]
+              },
+              showCustomUi: true,
+              strict: false
+            }
+          }
         }
       ];
 
