@@ -869,7 +869,7 @@ class GoogleSheetsService {
 
       console.log('🎨 Applying professional formatting to sheet...');
 
-      // Get the sheet ID
+      // Get sheet info including existing banding and conditional format rules
       const sheetInfo = await this.sheets.spreadsheets.get({
         spreadsheetId: this.spreadsheetId,
       });
@@ -879,174 +879,64 @@ class GoogleSheetsService {
       }
       const sheetId = sheet.properties.sheetId;
 
-      // Tree Logistics green: RGB(34, 120, 60) = #22783C
+      // Step 1: Clean up existing banding and conditional formatting so we can re-run safely
+      const cleanupRequests = [];
+
+      if (sheet.bandedRanges && sheet.bandedRanges.length > 0) {
+        for (const band of sheet.bandedRanges) {
+          cleanupRequests.push({ deleteBanding: { bandedRangeId: band.bandedRangeId } });
+        }
+        console.log(`🧹 Removing ${sheet.bandedRanges.length} existing banded ranges`);
+      }
+
+      if (sheet.conditionalFormats && sheet.conditionalFormats.length > 0) {
+        for (let i = sheet.conditionalFormats.length - 1; i >= 0; i--) {
+          cleanupRequests.push({ deleteConditionalFormatRule: { sheetId: sheetId, index: i } });
+        }
+        console.log(`🧹 Removing ${sheet.conditionalFormats.length} existing conditional format rules`);
+      }
+
+      if (cleanupRequests.length > 0) {
+        await this.sheets.spreadsheets.batchUpdate({
+          spreadsheetId: this.spreadsheetId,
+          resource: { requests: cleanupRequests }
+        });
+        console.log('✅ Cleanup complete');
+      }
+
+      // Colors
       const headerBg = { red: 34/255, green: 120/255, blue: 60/255, alpha: 1 };
       const white = { red: 1, green: 1, blue: 1, alpha: 1 };
       const lightGray = { red: 0.95, green: 0.95, blue: 0.95, alpha: 1 };
-
-      // Status colors
       const statusColors = {
-        completed: { red: 0.85, green: 0.95, blue: 0.85 },     // Light green
-        inProgress: { red: 1, green: 0.92, blue: 0.8 },        // Light orange
-        review: { red: 0.85, green: 0.92, blue: 1 },           // Light blue
-        notStarted: { red: 1, green: 0.85, blue: 0.85 },       // Light red
-        clarification: { red: 1, green: 0.97, blue: 0.8 }      // Light yellow
+        completed: { red: 0.85, green: 0.95, blue: 0.85 },
+        inProgress: { red: 1, green: 0.92, blue: 0.8 },
+        review: { red: 0.85, green: 0.92, blue: 1 },
+        notStarted: { red: 1, green: 0.85, blue: 0.85 },
+        clarification: { red: 1, green: 0.97, blue: 0.8 }
       };
 
-      const requests = [
-        // 1. Freeze header row
-        {
-          updateSheetProperties: {
-            properties: {
-              sheetId: sheetId,
-              gridProperties: { frozenRowCount: 1 }
-            },
-            fields: 'gridProperties.frozenRowCount'
-          }
-        },
-
-        // 2. Header row formatting - dark green background, white bold text
+      // Step 2: Apply structure (header, widths, borders, center, dropdown)
+      const structureRequests = [
+        { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } },
         {
           repeatCell: {
             range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 8 },
-            cell: {
-              userEnteredFormat: {
-                backgroundColor: headerBg,
-                textFormat: { foregroundColor: white, bold: true, fontSize: 11 },
-                horizontalAlignment: 'CENTER',
-                verticalAlignment: 'MIDDLE',
-                padding: { top: 6, bottom: 6, left: 8, right: 8 }
-              }
-            },
+            cell: { userEnteredFormat: { backgroundColor: headerBg, textFormat: { foregroundColor: white, bold: true, fontSize: 11 }, horizontalAlignment: 'CENTER', verticalAlignment: 'MIDDLE', padding: { top: 6, bottom: 6, left: 8, right: 8 } } },
             fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,padding)'
           }
         },
-
-        // 3. Set column widths
-        // A: Timestamp (160px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 }, properties: { pixelSize: 160 }, fields: 'pixelSize' } },
-        // B: First Name (120px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
-        // C: Last Name (120px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
-        // D: Station (80px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 3, endIndex: 4 }, properties: { pixelSize: 80 }, fields: 'pixelSize' } },
-        // E: Request/Question (400px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 }, properties: { pixelSize: 400 }, fields: 'pixelSize' } },
-        // F: Request ID (180px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 5, endIndex: 6 }, properties: { pixelSize: 180 }, fields: 'pixelSize' } },
-        // G: Phone Number (180px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 }, properties: { pixelSize: 180 }, fields: 'pixelSize' } },
-        // H: Status (150px)
         { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 }, properties: { pixelSize: 150 }, fields: 'pixelSize' } },
-
-        // 4. Set header row height
         { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 }, properties: { pixelSize: 36 }, fields: 'pixelSize' } },
-
-        // 5. Alternating row colors (banding)
-        {
-          addBanding: {
-            bandedRange: {
-              range: { sheetId, startRowIndex: 0, endRowIndex: 1000, startColumnIndex: 0, endColumnIndex: 8 },
-              rowProperties: {
-                headerColor: headerBg,
-                firstBandColor: { red: 1, green: 1, blue: 1 },
-                secondBandColor: lightGray
-              }
-            }
-          }
-        },
-
-        // 6. Conditional formatting for Status column
-        // Completed = green
-        {
-          addConditionalFormatRule: {
-            rule: {
-              ranges: [{ sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }],
-              booleanRule: {
-                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'Completed' }] },
-                format: { backgroundColor: statusColors.completed, textFormat: { bold: true } }
-              }
-            },
-            index: 0
-          }
-        },
-        // In Progress = orange
-        {
-          addConditionalFormatRule: {
-            rule: {
-              ranges: [{ sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }],
-              booleanRule: {
-                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'In Progress' }] },
-                format: { backgroundColor: statusColors.inProgress, textFormat: { bold: true } }
-              }
-            },
-            index: 1
-          }
-        },
-        // Review = blue
-        {
-          addConditionalFormatRule: {
-            rule: {
-              ranges: [{ sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }],
-              booleanRule: {
-                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'Review' }] },
-                format: { backgroundColor: statusColors.review, textFormat: { bold: true } }
-              }
-            },
-            index: 2
-          }
-        },
-        // Not started = red
-        {
-          addConditionalFormatRule: {
-            rule: {
-              ranges: [{ sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }],
-              booleanRule: {
-                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'Not started' }] },
-                format: { backgroundColor: statusColors.notStarted, textFormat: { bold: true } }
-              }
-            },
-            index: 3
-          }
-        },
-        // needs to be clarified = yellow
-        {
-          addConditionalFormatRule: {
-            rule: {
-              ranges: [{ sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }],
-              booleanRule: {
-                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'needs to be clarified' }] },
-                format: { backgroundColor: statusColors.clarification, textFormat: { bold: true } }
-              }
-            },
-            index: 4
-          }
-        },
-
-        // 7. Center-align Station column (D)
-        {
-          repeatCell: {
-            range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 3, endColumnIndex: 4 },
-            cell: {
-              userEnteredFormat: { horizontalAlignment: 'CENTER' }
-            },
-            fields: 'userEnteredFormat.horizontalAlignment'
-          }
-        },
-
-        // 8. Center-align Status column (H)
-        {
-          repeatCell: {
-            range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 },
-            cell: {
-              userEnteredFormat: { horizontalAlignment: 'CENTER' }
-            },
-            fields: 'userEnteredFormat.horizontalAlignment'
-          }
-        },
-
-        // 9. Add thin borders to all cells
+        { repeatCell: { range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 3, endColumnIndex: 4 }, cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
+        { repeatCell: { range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }, cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
         {
           updateBorders: {
             range: { sheetId, startRowIndex: 0, endRowIndex: 1000, startColumnIndex: 0, endColumnIndex: 8 },
@@ -1058,28 +948,17 @@ class GoogleSheetsService {
             innerVertical: { style: 'SOLID', width: 1, color: { red: 0.85, green: 0.85, blue: 0.85 } }
           }
         },
-
-        // 10. Data validation (dropdown) for entire Status column
         {
           setDataValidation: {
-            range: {
-              sheetId: sheetId,
-              startRowIndex: 1,
-              endRowIndex: 1000,
-              startColumnIndex: 7, // Column H
-              endColumnIndex: 8
-            },
+            range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 },
             rule: {
-              condition: {
-                type: 'ONE_OF_LIST',
-                values: [
-                  { userEnteredValue: 'Review' },
-                  { userEnteredValue: 'Not started' },
-                  { userEnteredValue: 'In Progress' },
-                  { userEnteredValue: 'Completed' },
-                  { userEnteredValue: 'needs to be clarified' }
-                ]
-              },
+              condition: { type: 'ONE_OF_LIST', values: [
+                { userEnteredValue: 'Review' },
+                { userEnteredValue: 'Not started' },
+                { userEnteredValue: 'In Progress' },
+                { userEnteredValue: 'Completed' },
+                { userEnteredValue: 'needs to be clarified' }
+              ]},
               showCustomUi: true,
               strict: false
             }
@@ -1089,23 +968,61 @@ class GoogleSheetsService {
 
       await this.sheets.spreadsheets.batchUpdate({
         spreadsheetId: this.spreadsheetId,
-        resource: { requests }
+        resource: { requests: structureRequests }
       });
+      console.log('✅ Structure formatting applied');
 
-      console.log('✅ Professional formatting applied successfully!');
+      // Step 3: Add banding
+      await this.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: this.spreadsheetId,
+        resource: { requests: [{ addBanding: { bandedRange: {
+          range: { sheetId, startRowIndex: 0, endRowIndex: 1000, startColumnIndex: 0, endColumnIndex: 8 },
+          rowProperties: { headerColor: headerBg, firstBandColor: { red: 1, green: 1, blue: 1 }, secondBandColor: lightGray }
+        }}}]}
+      });
+      console.log('✅ Banding applied');
+
+      // Step 4: Add conditional formatting for status colors
+      const cfRequests = [
+        { status: 'Completed', color: statusColors.completed },
+        { status: 'In Progress', color: statusColors.inProgress },
+        { status: 'Review', color: statusColors.review },
+        { status: 'Not started', color: statusColors.notStarted },
+        { status: 'needs to be clarified', color: statusColors.clarification }
+      ].map((item, index) => ({
+        addConditionalFormatRule: {
+          rule: {
+            ranges: [{ sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 }],
+            booleanRule: {
+              condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: item.status }] },
+              format: { backgroundColor: item.color, textFormat: { bold: true } }
+            }
+          },
+          index: index
+        }
+      }));
+
+      await this.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: this.spreadsheetId,
+        resource: { requests: cfRequests }
+      });
+      console.log('✅ Conditional formatting applied');
+
+      console.log('🎉 All formatting applied successfully!');
       return {
         success: true,
         applied: [
           'Header: dark green background, white bold text, frozen',
           'Column widths optimized',
           'Alternating row colors (gray/white banding)',
+          'Status dropdown with Review option for all rows',
           'Status conditional formatting (green/orange/blue/red/yellow)',
           'Station & Status columns centered',
           'Light borders on all cells'
         ]
       };
     } catch (error) {
-      console.error('❌ Error applying formatting:', error);
+      console.error('❌ Error applying formatting:', error.message);
       throw error;
     }
   }
