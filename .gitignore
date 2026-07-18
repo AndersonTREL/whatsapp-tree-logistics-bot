@@ -77,3 +77,7 @@ jspm_packages/
 ehthumbs.db
 Thumbs.db
 credentials/google-credentials.json
+
+# Recovery output - contains driver personal data (names, phone numbers, IBANs)
+recovery-report.json
+backups/
