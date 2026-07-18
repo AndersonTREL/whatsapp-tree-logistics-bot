@@ -39,6 +39,12 @@ const DASH_OPEN_STATUSES = ['To be contacted', 'Not started', 'needs to be clari
 const DASH_DONE_STATUS = 'Completed';
 const DASH_STALE_DAYS = 7; // an open request older than this is flagged
 
+// Hours at which the dashboard rebuilds itself. Apps Script treats these as a
+// window ("sometime in the 07:00 hour"), not an exact time - so the morning
+// refresh is set to 07:00 rather than 08:00 to be safely finished before
+// daily_email_report.gs sends the open-requests email at 08:00.
+const DASH_REFRESH_HOURS = [7, 15];
+
 // Known spelling variants in the free-text Owner column. Without this,
 // "Disaptcher DBE2" and "Dispatcher DBE2" count as two different people.
 const DASH_OWNER_FIXES = {
@@ -69,14 +75,19 @@ function onOpen() {
 function setupDashboard() {
   buildDashboard();
 
-  // Refresh every morning so the tab is current before anyone opens it
+  // Clear existing refresh triggers first so re-running this never stacks duplicates
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'buildDashboard') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('buildDashboard').timeBased().atHour(7).everyDays(1).create();
+
+  DASH_REFRESH_HOURS.forEach(function (hour) {
+    ScriptApp.newTrigger('buildDashboard').timeBased().atHour(hour).everyDays(1).create();
+  });
 
   SpreadsheetApp.getActiveSpreadsheet().toast(
-    'Dashboard created. It refreshes daily at 07:00, or use TREL -> Refresh dashboard.',
+    'Dashboard created. It refreshes at ' + DASH_REFRESH_HOURS.map(function (h) {
+      return (h < 10 ? '0' : '') + h + ':00';
+    }).join(' and ') + ', or use TREL -> Refresh dashboard.',
     'Setup complete', 10
   );
 }
