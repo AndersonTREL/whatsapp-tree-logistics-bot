@@ -2,6 +2,24 @@ const { google } = require('googleapis');
 const path = require('path');
 const fs = require('fs');
 
+/**
+ * Sheet layout — "Driver Requests" tab.
+ *
+ * Columns A-H are owned by the bot: it writes them on every new request and
+ * they must stay in this exact order (addRequest, getAllRequests, formatSheet
+ * and google-apps-script/daily_email_report.gs all index by position).
+ *
+ * Columns I onward are owned by the office team (Owner, Priority, DA Contacted,
+ * Out or still with us, Action, Notes). The bot must never read or write them —
+ * appends stop at H and formatting stops at H so the team's tracking is safe.
+ */
+const COLUMNS = ['Timestamp', 'First Name', 'Last Name', 'Station', 'Request/Question', 'Request ID', 'Phone Number', 'Status'];
+const LAST_BOT_COLUMN = 'H'; // COLUMNS.length === 8
+
+// The exact status values offered by the column H dropdown. normalizeStatusString()
+// must round-trip every one of these unchanged, or the dropdown breaks.
+const STATUS_OPTIONS = ['To be contacted', 'In Progress', 'Completed', 'Not started', 'needs to be clarified'];
+
 class GoogleSheetsService {
   constructor() {
     this.sheets = null;
@@ -86,7 +104,7 @@ class GoogleSheetsService {
                     title: this.sheetName,
                     gridProperties: {
                       rowCount: 1000,
-                      columnCount: 7
+                      columnCount: 8 // A-H; headers below write through column H
                     }
                   }
                 }
@@ -101,9 +119,7 @@ class GoogleSheetsService {
           range: `${this.sheetName}!A1:H1`,
           valueInputOption: 'RAW',
           resource: {
-            values: [
-              ['Timestamp', 'First Name', 'Last Name', 'Station', 'Request/Question', 'Request ID', 'Phone Number', 'Status']
-            ]
+            values: [COLUMNS]
           }
         });
 
@@ -153,6 +169,66 @@ class GoogleSheetsService {
     }
   }
 
+  /**
+   * Find the sheet row number (1-indexed) holding a given Request ID.
+   * Request IDs live in column F.
+   * @returns {Promise<number|null>} - Row number, or null if not found
+   */
+  async findRowByRequestId(requestId) {
+    if (!requestId) return null;
+
+    try {
+      if (!this.sheets) {
+        await this.authenticate();
+      }
+
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `${this.sheetName}!F:F`,
+      });
+
+      const rows = response.data.values || [];
+      const index = rows.findIndex(row => (row[0] || '').toString().trim() === requestId);
+
+      return index === -1 ? null : index + 1;
+    } catch (error) {
+      console.error(`⚠️ Could not search for Request ID ${requestId}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Read back a row we just wrote and confirm the Request ID is actually there.
+   * The Sheets API can report success on a write that did not land where we
+   * expect, so we never tell a driver "saved" without verifying first.
+   * @returns {Promise<number|null>} - Verified row number, or null if not found
+   */
+  async verifyRequestWritten(requestId, updatedRange) {
+    const rowMatch = String(updatedRange || '').match(/(\d+)$/);
+
+    if (rowMatch) {
+      const rowNumber = parseInt(rowMatch[1], 10);
+      try {
+        const response = await this.sheets.spreadsheets.values.get({
+          spreadsheetId: this.spreadsheetId,
+          range: `${this.sheetName}!F${rowNumber}`,
+        });
+
+        const value = (response.data.values?.[0]?.[0] || '').toString().trim();
+        if (value === requestId) {
+          return rowNumber;
+        }
+
+        console.warn(`⚠️ Row ${rowNumber} holds "${value}", expected "${requestId}" — scanning the whole column`);
+      } catch (error) {
+        console.warn(`⚠️ Could not read back row ${rowNumber}:`, error.message);
+      }
+    }
+
+    // Fall back to scanning the whole column in case the row landed elsewhere
+    return await this.findRowByRequestId(requestId);
+  }
+
   async addRequest(requestData) {
     const MAX_RETRIES = 3;
     let attempt = 0;
@@ -175,6 +251,17 @@ class GoogleSheetsService {
           requestData.rowId = `REQ-${Date.now()}-${rowCount}`;
         }
 
+        // A previous attempt may have actually landed despite throwing (e.g. the
+        // write succeeded but the response timed out). Check before appending
+        // again so a retry never creates a duplicate row.
+        if (attempt > 0) {
+          const existingRow = await this.findRowByRequestId(requestData.rowId);
+          if (existingRow) {
+            console.log(`✅ Request ${requestData.rowId} already at row ${existingRow} — skipping duplicate append`);
+            return { success: true, rowId: requestData.rowId, row: existingRow };
+          }
+        }
+
         // Structure with 6 required fields + Request ID + Phone Number + Status
         const values = [
           [
@@ -194,93 +281,98 @@ class GoogleSheetsService {
           spreadsheetId: this.spreadsheetId,
           range: `${this.sheetName}!A:H`,
           valueInputOption: 'RAW',
+          // INSERT_ROWS is required. The default (OVERWRITE) writes into whatever
+          // cells the API thinks come after the table, which silently overwrites
+          // existing requests instead of adding a new row.
+          insertDataOption: 'INSERT_ROWS',
           resource: { values },
         });
 
-        console.log('✅ Request successfully added to Google Sheets');
-        console.log('📊 Response details:', {
+        const updatedRange = response.data.updates?.updatedRange || '';
+        console.log('📊 Append response:', {
           spreadsheetId: response.data.spreadsheetId,
-          updatedRange: response.data.updates?.updatedRange,
+          updatedRange: updatedRange,
           updatedRows: response.data.updates?.updatedRows
         });
 
+        // Never report success on an unverified write — read the row back first.
+        const verifiedRow = await this.verifyRequestWritten(requestData.rowId, updatedRange);
+        if (!verifiedRow) {
+          throw new Error(
+            `Write verification failed: ${requestData.rowId} is not in the sheet after append (reported range: ${updatedRange || 'unknown'})`
+          );
+        }
+
+        console.log(`✅ Request ${requestData.rowId} verified in sheet at row ${verifiedRow}`);
+
         // Apply dropdown data validation to the Status cell (column H) for the new row
         try {
-          const updatedRange = response.data.updates?.updatedRange || '';
-          // Extract the row number from the updated range (e.g., "Driver Requests!A12:H12" -> 12)
-          const rowMatch = updatedRange.match(/(\d+)$/);
-          if (rowMatch) {
-            const newRowNumber = parseInt(rowMatch[1]) - 1; // 0-indexed for batchUpdate
+          const rowIndex = verifiedRow - 1; // 0-indexed for batchUpdate
 
-            // Get the sheet ID
-            const sheetInfo = await this.sheets.spreadsheets.get({
-              spreadsheetId: this.spreadsheetId,
-            });
-            const sheet = sheetInfo.data.sheets.find(s => s.properties.title === this.sheetName);
-            const sheetId = sheet ? sheet.properties.sheetId : 0;
+          // Get the sheet ID
+          const sheetInfo = await this.sheets.spreadsheets.get({
+            spreadsheetId: this.spreadsheetId,
+          });
+          const sheet = sheetInfo.data.sheets.find(s => s.properties.title === this.sheetName);
+          const sheetId = sheet ? sheet.properties.sheetId : 0;
 
-            await this.sheets.spreadsheets.batchUpdate({
-              spreadsheetId: this.spreadsheetId,
-              resource: {
-                requests: [{
-                  setDataValidation: {
-                    range: {
-                      sheetId: sheetId,
-                      startRowIndex: newRowNumber,
-                      endRowIndex: newRowNumber + 1,
-                      startColumnIndex: 7, // Column H (0-indexed)
-                      endColumnIndex: 8
+          await this.sheets.spreadsheets.batchUpdate({
+            spreadsheetId: this.spreadsheetId,
+            resource: {
+              requests: [{
+                setDataValidation: {
+                  range: {
+                    sheetId: sheetId,
+                    startRowIndex: rowIndex,
+                    endRowIndex: rowIndex + 1,
+                    startColumnIndex: 7, // Column H (0-indexed)
+                    endColumnIndex: 8
+                  },
+                  rule: {
+                    condition: {
+                      type: 'ONE_OF_LIST',
+                      values: STATUS_OPTIONS.map(v => ({ userEnteredValue: v }))
                     },
-                    rule: {
-                      condition: {
-                        type: 'ONE_OF_LIST',
-                        values: [
-                          { userEnteredValue: 'To be contacted' },
-                          { userEnteredValue: 'In Progress' },
-                          { userEnteredValue: 'Completed' },
-                          { userEnteredValue: 'Not started' },
-                          { userEnteredValue: 'needs to be clarified' }
-                        ]
-                      },
-                      showCustomUi: true,
-                      strict: false
-                    }
+                    showCustomUi: true,
+                    strict: false
                   }
-                }]
-              }
-            });
-            console.log('✅ Dropdown data validation applied to Status cell');
-          }
+                }
+              }]
+            }
+          });
+          console.log('✅ Dropdown data validation applied to Status cell');
         } catch (validationError) {
           // Don't fail the whole request if validation setup fails
           console.warn('⚠️ Could not apply dropdown validation:', validationError.message);
         }
 
-        return { success: true, rowId: requestData.rowId };
+        return { success: true, rowId: requestData.rowId, row: verifiedRow };
 
       } catch (error) {
         attempt++;
         console.error(`❌ Error adding request (Attempt ${attempt}/${MAX_RETRIES}):`, error.message);
 
-        // If it's the last attempt, try to backup
         if (attempt >= MAX_RETRIES) {
-          console.error('❌ All retries failed. Attempting local backup...');
+          console.error('❌ All retries failed. This request did NOT reach Google Sheets.');
 
-          const backedUp = await this.backupRequest(requestData);
+          // Emit one structured, greppable line so the request can be recovered
+          // from Railway's log history. Search Railway for: REQUEST_NOT_SAVED
+          console.error('🚨 REQUEST_NOT_SAVED ' + JSON.stringify({
+            rowId: requestData.rowId,
+            timestamp: requestData.timestamp,
+            firstName: requestData.firstName,
+            lastName: requestData.lastName,
+            station: requestData.station,
+            phoneNumber: requestData.phoneNumber,
+            request: requestData.request,
+            error: error.message
+          }));
 
-          if (backedUp) {
-            console.log('✅ Request saved to local backup. It is safe but needs to be manually synced later.');
-            // We return success here so the user gets a confirmation message, 
-            // even though it's only saved locally.
-            // You might want to append a note to the returned rowId or structure to indicate this.
-            return {
-              success: true,
-              rowId: requestData.rowId || `REQ-BACKUP-${Date.now()}`,
-              savedLocally: true
-            };
-          }
+          // Best-effort local copy. On Railway the container filesystem is wiped
+          // on every deploy and restart, so this must never be treated as a
+          // successful save — we throw so the driver is told the truth.
+          await this.backupRequest(requestData);
 
-          // Re-throw if even backup failed
           throw error;
         }
 
@@ -391,7 +483,10 @@ class GoogleSheetsService {
       'inprogress': 'In Progress',
       'in-progress': 'In Progress',
       'in_progress': 'In Progress',
-      'inprogress': 'In Progress',
+      'to be contacted': 'To be contacted',
+      'tobecontacted': 'To be contacted',
+      'to-be-contacted': 'To be contacted',
+      'to_be_contacted': 'To be contacted',
       'not started': 'Not started',
       'notstarted': 'Not started',
       'not-started': 'Not started',
@@ -444,49 +539,6 @@ class GoogleSheetsService {
       return { success: true };
     } catch (error) {
       console.error('Error updating status:', error);
-      throw error;
-    }
-  }
-
-  async updateRequestFeedback(rowNumber, rating, feedbackText) {
-    try {
-      if (!this.sheets) {
-        await this.authenticate();
-      }
-
-      await this.sheets.spreadsheets.values.update({
-        spreadsheetId: this.spreadsheetId,
-        range: `${this.sheetName}!M${rowNumber}`,
-        valueInputOption: 'RAW',
-        resource: {
-          values: [[`${rating} - ${feedbackText}`]]
-        }
-      });
-
-      console.log(`✅ Updated feedback for row ${rowNumber}: ${rating} - ${feedbackText}`);
-      return { success: true };
-    } catch (error) {
-      console.error('Error updating feedback:', error);
-      throw error;
-    }
-  }
-
-  async cleanupDuplicateFeedback() {
-    try {
-      const allRequests = await this.getAllRequests();
-      let cleanedRows = 0;
-
-      // This is a simplified cleanup - in a real scenario you'd implement
-      // more sophisticated duplicate detection logic
-      console.log(`📊 Found ${allRequests.length} total requests`);
-
-      return {
-        success: true,
-        totalRows: allRequests.length,
-        cleanedRows: cleanedRows
-      };
-    } catch (error) {
-      console.error('Error cleaning up feedback:', error);
       throw error;
     }
   }
@@ -672,10 +724,12 @@ class GoogleSheetsService {
       console.log('🔧 Force fixing ALL status values to exact matches...');
 
       // Define exact status values as they should appear in Google Sheets
+      // Must stay in sync with STATUS_OPTIONS / the column H dropdown
       const exactStatuses = {
         'Completed': 'Completed',
         'In Progress': 'In Progress',
         'In progress': 'In Progress', // Normalize to "In Progress"
+        'To be contacted': 'To be contacted',
         'Not started': 'Not started',
         'needs to be clarified': 'needs to be clarified'
       };
@@ -952,13 +1006,7 @@ class GoogleSheetsService {
           setDataValidation: {
             range: { sheetId, startRowIndex: 1, endRowIndex: 1000, startColumnIndex: 7, endColumnIndex: 8 },
             rule: {
-              condition: { type: 'ONE_OF_LIST', values: [
-                { userEnteredValue: 'To be contacted' },
-                { userEnteredValue: 'Not started' },
-                { userEnteredValue: 'In Progress' },
-                { userEnteredValue: 'Completed' },
-                { userEnteredValue: 'needs to be clarified' }
-              ]},
+              condition: { type: 'ONE_OF_LIST', values: STATUS_OPTIONS.map(v => ({ userEnteredValue: v })) },
               showCustomUi: true,
               strict: false
             }

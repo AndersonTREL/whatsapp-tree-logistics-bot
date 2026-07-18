@@ -379,9 +379,11 @@ async function handleRequestCollection(message, from, data) {
     console.error('❌ Failed to save request:', error);
     
     const fullName = `${data.firstName} ${data.lastName}`;
-    return `⚠️ We're sorry ${fullName}, but we encountered an issue saving your request to our system. Please try sending your request again in a moment. 
+    return `⚠️ We're sorry ${fullName} — your request could NOT be saved and has not reached our team.
 
-If the problem persists, please contact support directly.`;
+Please send your request again in a moment. You will get a Request ID once it is saved successfully.
+
+If it fails again, please contact the office directly so your request is not lost.`;
   }
 }
 
@@ -423,7 +425,9 @@ async function saveRequest(from, data, requestText) {
       rowId: `REQ-${Date.now()}`,
     });
     
-    console.log(`✅ Request saved successfully to Google Sheets:`, result);
+    // addRequest throws unless the row was written AND read back, so reaching
+    // this point means the request is genuinely in the sheet.
+    console.log(`✅ Request ${result.rowId} verified in Google Sheets at row ${result.row}`);
     return { success: true, rowId: result.rowId };
   } catch (error) {
     console.error('❌ Google Sheets Error - Failed to save request:');
