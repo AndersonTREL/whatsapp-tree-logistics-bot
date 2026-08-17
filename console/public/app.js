@@ -1,0 +1,865 @@
+/* Driver Requests Console — client.
+ *
+ * Mirrors the prototype's client-side state model: one `state` object, a single
+ * render() per change. Request text is written by drivers and is therefore
+ * untrusted — everything derived from sheet data goes through esc(). */
+
+(function () {
+  'use strict';
+
+  var STATUS_COLORS = {
+    'To be contacted':       { bg: '#FFE1AC', text: '#7A4A00', bar: '#F0A93C' },
+    'In Progress':           { bg: '#D9E7FF', text: '#1B4B8F', bar: '#3E7BD6' },
+    'Completed':             { bg: '#D8F0DD', text: '#1B5E2A', bar: '#199948' },
+    'Not started':           { bg: '#FFDCDC', text: '#8C2020', bar: '#D24E4E' },
+    'needs to be clarified': { bg: '#FFF3C4', text: '#6F5A00', bar: '#D8B326' }
+  };
+  var STATUS_FALLBACK = { bg: '#EDF0EC', text: '#46584C', bar: '#9AA79E' };
+
+  var state = {
+    ready: false,
+    authed: false,
+    publicDashboard: true,
+    actor: null,
+    ownerGroups: [],
+    view: 'inbox',
+    requests: [],
+    options: null,
+    dashboard: null,
+    syncedAt: null,
+    selectedId: null,
+    station: 'All',
+    statusFilter: 'Open',
+    query: '',
+    draft: '',
+    density: 'comfortable',
+    error: null,
+    gateError: null,
+    saving: false,
+    pickingWho: false
+  };
+
+  var root = document.getElementById('app');
+
+  // ---------------------------------------------------------------- helpers
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function statusColors(status) { return STATUS_COLORS[status] || STATUS_FALLBACK; }
+
+  function ageColor(age) {
+    if (age == null) return '#8B998F';
+    if (age <= 7) return '#5D6D63';
+    if (age <= 21) return '#8A5A00';
+    return '#B4291F';
+  }
+
+  function initials(name) {
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '??';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  function isOpen(status) {
+    return String(status || '').trim().toLowerCase() !== 'completed';
+  }
+
+  function cleanPhone(phone) {
+    return String(phone || '').replace(/^whatsapp:/i, '');
+  }
+
+  function shortTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function relativeWhen(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString('en-GB', {
+      day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+  }
+
+  function statusPill(status, size) {
+    var c = statusColors(status);
+    return '<span class="pill" style="background:' + c.bg + ';color:' + c.text +
+      (size ? ';font-size:' + size : '') + '">' + esc(status || '—') + '</span>';
+  }
+
+  function api(path, options) {
+    return fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}))
+      .then(function (res) {
+        return res.text().then(function (text) {
+          var body = null;
+          try { body = text ? JSON.parse(text) : null; } catch (e) { /* ignore */ }
+          if (!res.ok) {
+            var err = new Error((body && body.error) || ('HTTP ' + res.status));
+            err.status = res.status;
+            throw err;
+          }
+          return body;
+        });
+      });
+  }
+
+  // ---------------------------------------------------------------- filtering
+
+  function filtered() {
+    var q = state.query.trim().toLowerCase();
+
+    var rows = state.requests.filter(function (r) {
+      if (state.station !== 'All' && r.station !== state.station) return false;
+
+      if (state.statusFilter === 'Open' && !isOpen(r.status)) return false;
+      if (state.statusFilter === 'Unassigned' && r.owner !== 'Unassigned') return false;
+      if (['To be contacted', 'In Progress', 'Completed', 'Not started', 'needs to be clarified']
+        .indexOf(state.statusFilter) !== -1 && r.status !== state.statusFilter) return false;
+
+      if (q) {
+        var hay = [r.first, r.last, r.first + ' ' + r.last, r.id, r.text, r.category, r.owner, r.station]
+          .join(' ').toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    return rows.sort(function (a, b) {
+      var aa = a.age == null ? -1 : a.age;
+      var bb = b.age == null ? -1 : b.age;
+      if (bb !== aa) return bb - aa;
+      return String(a.id).localeCompare(String(b.id));
+    });
+  }
+
+  function selected() {
+    if (!state.selectedId) return null;
+    return state.requests.find(function (r) { return r.id === state.selectedId; }) || null;
+  }
+
+  function relatedTo(request) {
+    var key = cleanPhone(request.phone).replace(/\D/g, '');
+    if (!key) return [];
+    return state.requests.filter(function (r) {
+      return r.id !== request.id && cleanPhone(r.phone).replace(/\D/g, '') === key;
+    });
+  }
+
+  // ---------------------------------------------------------------- views
+
+  function topBar() {
+    var openCount = state.requests.filter(function (r) { return isOpen(r.status); }).length;
+    var tabs = [['inbox', 'Inbox'], ['dashboard', 'Dashboard'], ['sheet', 'Sheet layout']];
+
+    return '' +
+      '<div class="topbar">' +
+        '<div class="brand">' +
+          '<span class="brand-plate"><img src="/assets/tree-logistics-logo.png" alt="Tree Logistics"></span>' +
+          '<span>' +
+            '<div class="brand-title">Driver Requests</div>' +
+            '<div class="brand-sub mono">DA — Request · Tree Logistics</div>' +
+          '</span>' +
+        '</div>' +
+        '<div class="tabs">' +
+          tabs.map(function (t) {
+            return '<button class="tab' + (state.view === t[0] ? ' active' : '') +
+              '" data-view="' + t[0] + '">' + t[1] + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div class="topbar-right">' +
+          '<span class="live"><span class="dot"></span>Bot live · +49 15888 725850</span>' +
+          '<span class="synced mono">synced ' + esc(shortTime(state.syncedAt)) + '</span>' +
+          (state.saving ? '<span class="synced">saving…</span>' : '') +
+          '<button class="avatar-btn" id="whoBtn" title="' +
+            esc(state.actor ? state.actor.name + ' · ' + state.actor.team : 'Choose who you are') + '">' +
+            esc(state.actor ? initials(state.actor.name) : '?') +
+          '</button>' +
+        '</div>' +
+      '</div>' +
+      (state.error ? '<div class="banner">' + esc(state.error) + '</div>' : '') +
+      (openCount === 0 && state.authed && state.view === 'inbox'
+        ? '' : '');
+  }
+
+  function queuePane() {
+    var rows = filtered();
+    var openTotal = state.requests.filter(function (r) { return isOpen(r.status); }).length;
+    var chips = ['Open', 'Unassigned', 'To be contacted', 'In Progress', 'All'];
+    var stations = ['All', 'DBE2', 'DBE3'];
+
+    var list = rows.length === 0
+      ? '<div class="queue-empty">Nothing matches these filters.</div>'
+      : rows.map(function (r) {
+        var c = statusColors(r.status);
+        return '' +
+          '<div class="row' + (r.id === state.selectedId ? ' selected' : '') + '" data-id="' + esc(r.id) + '"' +
+            ' style="border-left-color:' + c.bar + '">' +
+            '<div class="row-line">' +
+              '<span class="row-name">' + esc((r.first + ' ' + r.last).trim() || 'Unknown driver') + '</span>' +
+              '<span class="station-tag">' + esc(r.station || '—') + '</span>' +
+              '<span class="row-age" style="color:' + ageColor(r.age) + '">' +
+                (r.age == null ? '—' : r.age + 'd open') + '</span>' +
+            '</div>' +
+            '<div class="row-preview">' + esc(String(r.text || '').replace(/\s*\n+\s*/g, ' ')) + '</div>' +
+            '<div class="row-line">' +
+              statusPill(r.status) +
+              (r.category ? '<span class="pill pill-cat">' + esc(r.category) + '</span>' : '') +
+              '<span class="row-owner' + (r.owner === 'Unassigned' ? ' unassigned' : '') + '">' +
+                esc(r.owner) + '</span>' +
+            '</div>' +
+            (r.isDuplicate
+              ? '<div class="dup">' + r.samePhoneOpenCount +
+                ' requests from this number — possible duplicate</div>'
+              : '') +
+          '</div>';
+      }).join('');
+
+    return '' +
+      '<div class="queue">' +
+        '<div class="queue-head">' +
+          '<div class="queue-title">' +
+            '<h2>Open queue</h2>' +
+            '<span class="queue-count">' + rows.length + ' of ' + openTotal + ' open</span>' +
+          '</div>' +
+          '<input class="search" id="search" placeholder="Search driver, request ID, text…" value="' +
+            esc(state.query) + '">' +
+          '<div class="segmented">' +
+            stations.map(function (s) {
+              return '<button data-station="' + s + '"' + (state.station === s ? ' class="on"' : '') + '>' +
+                (s === 'All' ? 'All stations' : s) + '</button>';
+            }).join('') +
+          '</div>' +
+          '<div class="chips">' +
+            chips.map(function (c) {
+              return '<button class="chip' + (state.statusFilter === c ? ' on' : '') +
+                '" data-chip="' + esc(c) + '">' + esc(c) + '</button>';
+            }).join('') +
+          '</div>' +
+        '</div>' +
+        '<div class="queue-list">' + list + '</div>' +
+      '</div>';
+  }
+
+  function selectMarkup(id, label, value, values, allowBlank) {
+    var opts = (allowBlank && values.indexOf('') === -1 ? [''] : []).concat(values);
+    return '' +
+      '<div class="field">' +
+        '<label for="' + id + '">' + esc(label) + '</label>' +
+        '<select id="' + id + '" data-field="' + id.replace('f-', '') + '">' +
+          opts.map(function (v) {
+            return '<option value="' + esc(v) + '"' +
+              (String(value || '') === String(v) ? ' selected' : '') + '>' +
+              (v === '' ? '—' : esc(v)) + '</option>';
+          }).join('') +
+        '</select>' +
+      '</div>';
+  }
+
+  function detailPane() {
+    var r = selected();
+    if (!r) {
+      return '<div class="detail"><div class="detail-empty">Select a request from the queue.</div></div>';
+    }
+
+    var o = state.options || {};
+    var ownerValues = [''];
+    (state.ownerGroups || []).forEach(function (g) {
+      g.people.forEach(function (p) { if (ownerValues.indexOf(p) === -1) ownerValues.push(p); });
+    });
+    // A legacy owner already on the row must stay visible in the dropdown.
+    if (r.owner && ownerValues.indexOf(r.owner) === -1 && r.owner !== 'Unassigned') {
+      ownerValues.push(r.owner);
+    }
+
+    var related = relatedTo(r);
+
+    var activity = (r.activity || []).length
+      ? r.activity.map(function (e) {
+        return '' +
+          '<div class="event">' +
+            '<span class="event-avatar">' + esc(initials(e.who)) + '</span>' +
+            '<span>' +
+              '<p class="event-text">' + esc(e.text) + '</p>' +
+              '<span class="event-meta mono">' + esc(relativeWhen(e.when)) + ' · ' + esc(e.who || 'Unknown') +
+              (e.team ? ' · ' + esc(e.team) : '') + '</span>' +
+            '</span>' +
+          '</div>';
+      }).join('')
+      : '<div class="caption" style="padding:10px 0">Nothing logged yet.</div>';
+
+    return '' +
+      '<div class="detail"><div class="detail-inner">' +
+
+        '<div class="detail-head">' +
+          '<div>' +
+            '<div class="detail-headline">' +
+              '<h1>' + esc((r.first + ' ' + r.last).trim() || 'Unknown driver') + '</h1>' +
+              '<span class="station-tag" style="font-size:11px;background:#E7EEE9;color:#2C5238">' +
+                esc(r.station || '—') + '</span>' +
+              statusPill(r.status, '11.5px') +
+            '</div>' +
+            '<div class="detail-meta mono">' +
+              '<span>' + esc(r.id) + '</span>' +
+              '<span>' + esc(cleanPhone(r.phone)) + '</span>' +
+              '<span>' + esc(r.ts) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="detail-age">' +
+            '<div class="n" style="color:' + ageColor(r.age) + '">' + (r.age == null ? '—' : r.age) + '</div>' +
+            '<div class="l">days open</div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="card">' +
+          '<div class="card-head">' +
+            '<span class="card-label">Request as received</span>' +
+            '<span class="card-hint">WhatsApp · column E, unedited</span>' +
+          '</div>' +
+          '<div class="card-body"><p class="request-text">' + esc(r.text) + '</p></div>' +
+        '</div>' +
+
+        '<div class="card pad">' +
+          '<span class="card-label">Triage</span>' +
+          '<div class="triage-grid">' +
+            selectMarkup('f-status', 'Status', r.status, o.statuses || [], false) +
+            selectMarkup('f-owner', 'Owner', r.owner === 'Unassigned' ? '' : r.owner, ownerValues, true) +
+            selectMarkup('f-priority', 'Priority', r.priority, o.priorities || [], true) +
+            selectMarkup('f-category', 'Category', r.category, o.categories || [], true) +
+          '</div>' +
+          '<div class="contact-row">' +
+            '<span class="contact-label">Driver contacted via</span>' +
+            (o.contactMethods || []).map(function (m) {
+              return '<button class="toggle' + (r.contacted === m ? ' on' : '') +
+                '" data-contact="' + esc(m) + '">' + esc(m) + '</button>';
+            }).join('') +
+            '<span class="contact-note">' +
+              (r.contacted ? 'Last contact logged: ' + esc(r.contacted) : 'No contact logged yet') +
+            '</span>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="two-col">' +
+          '<div class="card pad">' +
+            '<div class="detail-headline">' +
+              '<span class="card-label">Activity</span>' +
+              '<span class="card-hint">append-only · never overwrites the request</span>' +
+            '</div>' +
+            '<div>' + activity + '</div>' +
+            '<div class="composer">' +
+              '<textarea id="draft" placeholder="Log what you did — call, payroll check, reply sent…">' +
+                esc(state.draft) + '</textarea>' +
+              '<div class="composer-actions">' +
+                '<button class="btn-primary" id="logBtn"' +
+                  (state.draft.trim() ? '' : ' disabled') + '>Log action</button>' +
+                '<span class="caption">Written to the Activity Log tab with your name and a timestamp.</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="card pad">' +
+            '<span class="card-label">Same driver</span>' +
+            '<span class="card-hint">' +
+              (related.length
+                ? related.length + ' other request' + (related.length === 1 ? '' : 's') +
+                  ' from ' + esc(cleanPhone(r.phone))
+                : 'No other requests from this number.') +
+            '</span>' +
+            '<div class="related">' +
+              related.map(function (x) {
+                return '<div class="related-item" data-id="' + esc(x.id) + '">' +
+                  '<div class="related-top">' +
+                    '<span class="related-id mono">' + esc(x.id) + '</span>' + statusPill(x.status) +
+                  '</div>' +
+                  '<div class="related-preview">' +
+                    esc(String(x.text || '').replace(/\s*\n+\s*/g, ' ')) + '</div>' +
+                '</div>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="safety">' +
+          '<h4>Nothing here changes the driver’s request</h4>' +
+          '<p>Columns A–H stay exactly as the bot wrote them. This console only writes Status, Owner, ' +
+          'Priority, Category, Contacted and Action notes — the raw rows are never edited or deleted.</p>' +
+        '</div>' +
+
+      '</div></div>';
+  }
+
+  function barList(items) {
+    return items.map(function (b) {
+      return '' +
+        '<div class="bar-row">' +
+          '<div class="bar-top">' +
+            '<span class="bar-name">' + esc(b.name) + '</span>' +
+            '<span class="bar-count">' + b.count + '</span>' +
+            '<span class="bar-pct">' + b.pct + '%</span>' +
+          '</div>' +
+          '<div class="track"><div class="fill" style="width:' + Math.max(1, b.pct) +
+            '%;background:' + b.color + '"></div></div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function dashboardView() {
+    if (!state.dashboard) {
+      return '<div class="scroller"><div class="dash"><div class="detail-empty">Loading dashboard…</div></div></div>';
+    }
+
+    var s = state.dashboard.stats;
+    var k = s.kpis;
+    var maxAge = Math.max.apply(null, s.aging.map(function (a) { return a.count; }).concat([1]));
+
+    var kpis = [
+      ['Total requests', k.total, 'since launch', '#121A14'],
+      ['Open', k.open, k.openPct + '% of all', '#8A5A00'],
+      ['Completed', k.completed, k.completedPct + '% completion', '#199948'],
+      ['Unassigned', k.unassigned, 'no owner set', '#B4291F'],
+      ['Open > 7 days', k.overSeven, 'breaching SLA', '#B4291F'],
+      ['Avg days to resolve', k.avgDays == null ? '—' : k.avgDays,
+        k.avgDays == null
+          ? 'needs Completed At dates'
+          : 'target 3.0 · from ' + k.avgDaysCoverage + ' of ' + k.completedCount + ' completed',
+        '#121A14']
+    ];
+
+    return '' +
+      '<div class="scroller"><div class="dash">' +
+        '<div>' +
+          '<h1>Driver requests dashboard</h1>' +
+          '<div class="dash-sub">Tree Logistics GmbH · Last refreshed: ' +
+            esc(relativeWhen(state.dashboard.syncedAt)) + '</div>' +
+        '</div>' +
+
+        '<div class="kpis">' +
+          kpis.map(function (c) {
+            return '<div class="kpi">' +
+              '<div class="kpi-label">' + esc(c[0]) + '</div>' +
+              '<div class="kpi-value" style="color:' + c[3] + '">' + esc(c[1]) + '</div>' +
+              '<div class="kpi-note">' + esc(c[2]) + '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+
+        '<div class="band">' +
+          '<div class="card pad">' +
+            '<span class="card-label">Status mix</span>' +
+            '<div>' + barList(s.statusMix) + '</div>' +
+            '<span class="card-label" style="margin-top:6px">By station</span>' +
+            '<div>' + barList(s.byStation) + '</div>' +
+          '</div>' +
+
+          '<div class="card pad">' +
+            '<span class="card-label">Open work by owner</span>' +
+            '<table class="mini"><thead><tr>' +
+              '<th>Owner</th><th style="text-align:right">Open</th>' +
+              '<th style="text-align:right">Total</th><th style="text-align:right">Done %</th>' +
+            '</tr></thead><tbody>' +
+              s.byOwner.map(function (o) {
+                return '<tr>' +
+                  '<td class="' + (o.isUnassigned ? 'owner-unassigned' : '') + '">' + esc(o.owner) +
+                    (o.isLegacy ? ' <span class="legacy-flag">past</span>' : '') + '</td>' +
+                  '<td class="num ' + (o.open > 0 ? 'open-nonzero' : 'open-zero') + '">' + o.open + '</td>' +
+                  '<td class="num">' + o.total + '</td>' +
+                  '<td class="num">' + o.donePct + '%</td>' +
+                '</tr>';
+              }).join('') +
+            '</tbody></table>' +
+          '</div>' +
+
+          '<div class="card pad">' +
+            '<span class="card-label">Aging of open requests</span>' +
+            '<div>' +
+              s.aging.map(function (a) {
+                return '<div class="age-row">' +
+                  '<span class="age-label">' + esc(a.label) + '</span>' +
+                  '<span class="age-track"><span class="age-fill" style="width:' +
+                    Math.round((a.count / maxAge) * 100) + '%;background:' + a.color + '"></span></span>' +
+                  '<span class="age-count">' + a.count + '</span>' +
+                '</div>';
+              }).join('') +
+            '</div>' +
+            '<span class="caption">Age is counted from the timestamp the bot wrote in column A.</span>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="card pad">' +
+          '<span class="card-label">Needs attention now</span>' +
+          '<span class="card-hint">unassigned, or open longer than 21 days</span>' +
+          '<table class="attention-table"><thead><tr>' +
+            '<th style="width:66px">Age</th><th style="width:74px">Station</th>' +
+            '<th style="width:96px">Owner</th><th style="width:128px">Status</th><th>Request</th>' +
+          '</tr></thead><tbody>' +
+            (s.needsAttention.length
+              ? s.needsAttention.map(function (r) {
+                return '<tr data-goto="' + esc(r.id) + '">' +
+                  '<td style="font-weight:700;color:' + ageColor(r.age) + '">' +
+                    (r.age == null ? '—' : r.age + 'd') + '</td>' +
+                  '<td>' + esc(r.station || '—') + '</td>' +
+                  '<td class="' + (r.owner === 'Unassigned' ? 'owner-unassigned' : '') + '">' +
+                    esc(r.owner) + '</td>' +
+                  '<td>' + statusPill(r.status) + '</td>' +
+                  '<td class="ellipsis">' + esc(r.text == null ? '— hidden —' :
+                    String(r.text).replace(/\s*\n+\s*/g, ' ')) + '</td>' +
+                '</tr>';
+              }).join('')
+              : '<tr><td colspan="5" class="caption" style="padding:14px 10px">' +
+                'Nothing needs attention. Every open request has an owner and is under 21 days old.</td></tr>') +
+          '</tbody></table>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  function sheetView() {
+    var tabs = [
+      ['01_Requests_RAW', 'Bot only · protected', '#199948',
+        'Columns A–H exactly as today. Appended by the bot, protected range, no sorting or deleting. Nobody types here.'],
+      ['02_Triage', 'Office workspace', '#F0A93C',
+        'Open requests mirrored from raw with office columns: Owner, Priority, Category, Contacted, Action, Notes.'],
+      ['03_Activity_Log', 'Append-only', '#3E7BD6',
+        'One row per action taken, stamped with request ID, person and time.'],
+      ['04_Dashboard', 'Formulas only', '#5A6A5F',
+        'KPIs, aging, workload and station split — all QUERY/COUNTIFS off the raw tab.']
+    ];
+
+    return '' +
+      '<div class="scroller"><div class="sheet-view">' +
+        '<div class="sheet-intro">' +
+          '<h1 style="margin:0;font-size:22px;letter-spacing:-0.02em">Sheet layout</h1>' +
+          '<p>The spreadsheet keeps working for people who prefer Sheets. The bot owns the raw tab and ' +
+          'appends to it; the office works in columns the bot never touches. This console writes to the ' +
+          'same columns, so both ways of working stay in sync.</p>' +
+        '</div>' +
+
+        '<div class="tab-cards">' +
+          tabs.map(function (t) {
+            return '<div class="tab-card" style="border-left-color:' + t[2] + '">' +
+              '<h4 class="mono">' + esc(t[0]) + '</h4>' +
+              '<span class="tag" style="color:' + t[2] + '">' + esc(t[1]) + '</span>' +
+              '<p>' + esc(t[3]) + '</p>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+
+        '<div class="summary-cards">' +
+          '<div class="summary-plain">' +
+            '<h4>What changes in the sheet</h4>' +
+            '<ul>' +
+              '<li>· The raw tab becomes a protected range — appended to, never typed in.</li>' +
+              '<li>· Office tracking moves into named columns the bot ignores.</li>' +
+              '<li>· Actions get their own append-only tab instead of being overwritten in a cell.</li>' +
+              '<li>· Dashboard numbers come from formulas, so they cannot drift from the data.</li>' +
+            '</ul>' +
+          '</div>' +
+          '<div class="summary-safe">' +
+            '<h4>Nothing is deleted or adjusted</h4>' +
+            '<ul>' +
+              '<li>✓ Every existing row stays exactly where it is.</li>' +
+              '<li>✓ Columns A–H keep the values the bot wrote.</li>' +
+              '<li>✓ Existing owner names are kept, including past team members.</li>' +
+              '<li>✓ New columns are added beside the old ones, never over them.</li>' +
+            '</ul>' +
+          '</div>' +
+        '</div>' +
+      '</div></div>';
+  }
+
+  function gateView() {
+    return '' +
+      '<div class="gate"><div class="gate-card">' +
+        '<h1>Driver Requests Console</h1>' +
+        '<p>This console shows unedited driver messages and can update the sheet, so it needs the ' +
+        'team access code.</p>' +
+        (state.gateError ? '<div class="gate-error">' + esc(state.gateError) + '</div>' : '') +
+        '<input id="code" type="password" placeholder="Team access code" autocomplete="current-password">' +
+        '<button class="btn-primary" id="enterBtn" style="width:100%">Open console</button>' +
+      '</div></div>';
+  }
+
+  function whoView() {
+    return '' +
+      '<div class="gate"><div class="gate-card">' +
+        '<h1>Who are you?</h1>' +
+        '<p>Used to stamp the activity log, so the team can see who did what. Stored on this device only.</p>' +
+        '<div class="who-list">' +
+          (state.ownerGroups || []).map(function (g) {
+            return '<div>' +
+              '<div class="who-team-label">' + esc(g.team) + '</div>' +
+              '<div class="who-people">' +
+                g.people.map(function (p) {
+                  return '<button data-who="' + esc(p) + '">' + esc(p) + '</button>';
+                }).join('') +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+      '</div></div>';
+  }
+
+  // ---------------------------------------------------------------- render
+
+  function render() {
+    if (!state.ready) {
+      root.innerHTML = '<div class="detail-empty">Loading…</div>';
+      return;
+    }
+
+    if (!state.authed) {
+      root.innerHTML = topBar() + gateView();
+      wire();
+      var code = document.getElementById('code');
+      if (code) code.focus();
+      return;
+    }
+
+    if (state.pickingWho || !state.actor) {
+      root.innerHTML = topBar() + whoView();
+      wire();
+      return;
+    }
+
+    var body;
+    if (state.view === 'dashboard') body = dashboardView();
+    else if (state.view === 'sheet') body = sheetView();
+    else {
+      body = '<div class="inbox' + (state.selectedId ? ' has-selection' : '') +
+        (state.density === 'compact' ? ' compact' : '') + '">' +
+        queuePane() + detailPane() + '</div>';
+    }
+
+    root.innerHTML = topBar() + body;
+    wire();
+  }
+
+  // Preserve caret position when re-rendering after a keystroke.
+  function restoreFocus(id, caret) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.focus();
+    if (caret != null && el.setSelectionRange) {
+      try { el.setSelectionRange(caret, caret); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function wire() {
+    root.querySelectorAll('[data-view]').forEach(function (el) {
+      el.onclick = function () {
+        state.view = el.getAttribute('data-view');
+        if (state.view === 'dashboard') loadDashboard();
+        render();
+      };
+    });
+
+    var whoBtn = document.getElementById('whoBtn');
+    if (whoBtn) whoBtn.onclick = function () { state.pickingWho = true; render(); };
+
+    root.querySelectorAll('[data-who]').forEach(function (el) {
+      el.onclick = function () {
+        var name = el.getAttribute('data-who');
+        api('/api/actor', { method: 'POST', body: JSON.stringify({ name: name }) })
+          .then(function (res) {
+            state.actor = res.actor;
+            state.pickingWho = false;
+            render();
+          })
+          .catch(showError);
+      };
+    });
+
+    var enterBtn = document.getElementById('enterBtn');
+    if (enterBtn) {
+      var submit = function () {
+        var value = (document.getElementById('code') || {}).value || '';
+        api('/api/session', { method: 'POST', body: JSON.stringify({ code: value }) })
+          .then(function () {
+            state.authed = true;
+            state.gateError = null;
+            return boot();
+          })
+          .catch(function (err) {
+            state.gateError = err.message;
+            render();
+          });
+      };
+      enterBtn.onclick = submit;
+      var codeInput = document.getElementById('code');
+      if (codeInput) codeInput.onkeydown = function (e) { if (e.key === 'Enter') submit(); };
+    }
+
+    var search = document.getElementById('search');
+    if (search) {
+      search.oninput = function () {
+        var caret = search.selectionStart;
+        state.query = search.value;
+        render();
+        restoreFocus('search', caret);
+      };
+    }
+
+    root.querySelectorAll('[data-station]').forEach(function (el) {
+      el.onclick = function () { state.station = el.getAttribute('data-station'); render(); };
+    });
+    root.querySelectorAll('[data-chip]').forEach(function (el) {
+      el.onclick = function () { state.statusFilter = el.getAttribute('data-chip'); render(); };
+    });
+
+    root.querySelectorAll('.row[data-id], .related-item[data-id]').forEach(function (el) {
+      el.onclick = function () {
+        state.selectedId = el.getAttribute('data-id');
+        state.draft = ''; // selecting a request clears the note draft
+        render();
+      };
+    });
+
+    root.querySelectorAll('[data-goto]').forEach(function (el) {
+      el.onclick = function () {
+        state.selectedId = el.getAttribute('data-goto');
+        state.draft = '';
+        state.view = 'inbox';
+        render();
+      };
+    });
+
+    root.querySelectorAll('select[data-field]').forEach(function (el) {
+      el.onchange = function () {
+        var patch = {};
+        patch[el.getAttribute('data-field')] = el.value;
+        saveTriage(patch);
+      };
+    });
+
+    root.querySelectorAll('[data-contact]').forEach(function (el) {
+      el.onclick = function () {
+        var r = selected();
+        var value = el.getAttribute('data-contact');
+        saveTriage({ contacted: r && r.contacted === value ? '' : value });
+      };
+    });
+
+    var draft = document.getElementById('draft');
+    if (draft) {
+      draft.oninput = function () {
+        var wasEmpty = !state.draft.trim();
+        state.draft = draft.value;
+        var btn = document.getElementById('logBtn');
+        // Only re-render when the button's enabled state actually flips.
+        if (btn) {
+          if (wasEmpty !== !state.draft.trim()) btn.disabled = !state.draft.trim();
+          else btn.disabled = !state.draft.trim();
+        }
+      };
+    }
+
+    var logBtn = document.getElementById('logBtn');
+    if (logBtn) {
+      logBtn.onclick = function () {
+        var text = state.draft.trim();
+        if (!text) return;
+        var id = state.selectedId;
+        state.saving = true;
+        render();
+        api('/api/requests/' + encodeURIComponent(id) + '/activity', {
+          method: 'POST', body: JSON.stringify({ text: text })
+        }).then(function () {
+          state.draft = '';
+          return refresh(true);
+        }).catch(showError).finally(function () {
+          state.saving = false;
+          render();
+        });
+      };
+    }
+  }
+
+  function showError(err) {
+    state.error = err.message || String(err);
+    state.saving = false;
+    render();
+    setTimeout(function () {
+      if (state.error === (err.message || String(err))) { state.error = null; render(); }
+    }, 6000);
+  }
+
+  // ---------------------------------------------------------------- actions
+
+  function saveTriage(patch) {
+    var id = state.selectedId;
+    if (!id) return;
+
+    state.saving = true;
+    state.error = null;
+    render();
+
+    api('/api/requests/' + encodeURIComponent(id) + '/triage', {
+      method: 'POST', body: JSON.stringify(patch)
+    })
+      .then(function () { return refresh(true); })
+      .catch(showError)
+      .finally(function () { state.saving = false; render(); });
+  }
+
+  function refresh(force) {
+    return api('/api/state' + (force ? '?fresh=1' : ''))
+      .then(function (data) {
+        state.requests = data.requests;
+        state.options = data.options;
+        state.ownerGroups = data.options.owners;
+        state.syncedAt = data.syncedAt;
+        if (data.actor) state.actor = data.actor;
+        state.error = null;
+      })
+      .catch(function (err) {
+        if (err.status === 401) { state.authed = false; return; }
+        state.error = err.message;
+      });
+  }
+
+  function loadDashboard() {
+    return api('/api/dashboard')
+      .then(function (data) { state.dashboard = data; render(); })
+      .catch(function (err) { showError(err); });
+  }
+
+  function boot() {
+    return api('/api/whoami')
+      .then(function (who) {
+        state.authed = who.authed;
+        state.actor = who.actor;
+        state.publicDashboard = who.publicDashboard;
+        state.ownerGroups = who.owners;
+        state.ready = true;
+
+        if (!who.authed) { render(); return; }
+        return refresh(true).then(function () {
+          if (!state.selectedId) {
+            var first = filtered()[0];
+            if (first) state.selectedId = first.id;
+          }
+          render();
+        });
+      })
+      .catch(function (err) {
+        state.ready = true;
+        showError(err);
+      });
+  }
+
+  boot();
+
+  // Keep the queue current without a manual reload.
+  setInterval(function () {
+    if (!state.authed || state.saving) return;
+    if (state.view === 'dashboard') { loadDashboard(); return; }
+    if (document.activeElement && document.activeElement.id === 'draft') return;
+    refresh().then(render);
+  }, 30000);
+})();

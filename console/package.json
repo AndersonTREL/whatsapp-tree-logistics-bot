@@ -1,0 +1,25 @@
+{
+  "name": "driver-requests-console",
+  "version": "1.0.0",
+  "main": "server.js",
+  "directories": {
+    "lib": "lib",
+    "test": "tests"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node dev-server.js",
+    "test": "node tests/console_test.js && node tests/server_test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Web console over the Driver Requests sheet (WhatsApp bot request log)",
+  "dependencies": {
+    "express": "^4.22.2",
+    "google-auth-library": "^9.15.1"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}

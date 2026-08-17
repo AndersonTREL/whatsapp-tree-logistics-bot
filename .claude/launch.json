@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "console-demo",
+      "runtimeExecutable": "/opt/homebrew/opt/node@18/bin/node",
+      "runtimeArgs": ["console/dev-server.js"],
+      "port": 4100
+    }
+  ]
+}

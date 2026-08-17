@@ -1,0 +1,82 @@
+/**
+ * Demo server — runs the console against an in-memory sheet.
+ *
+ * No Google credentials, no network, nothing written to the real spreadsheet.
+ * Use it to look at the UI, or to try the triage and activity flows safely.
+ *
+ *   node console/dev-server.js
+ *   → http://localhost:4100   access code: demo
+ */
+
+process.env.CONSOLE_ACCESS_CODE = process.env.CONSOLE_ACCESS_CODE || 'demo';
+process.env.PORT = process.env.PORT || '4100';
+process.env.GOOGLE_SHEET_ID = 'DEMO-SHEET';
+
+const path = require('path');
+const { FakeSheets } = require('./tests/fake_sheets');
+const { SheetsClient, ACTIVITY_HEADERS } = require('./lib/sheets');
+const { Repository } = require('./lib/repository');
+
+// ---- a sheet that looks like the real one -------------------------------
+
+const HEADER = [
+  'Timestamp', 'First Name', 'Last Name', 'Station', 'Request/Question',
+  'Request ID', 'Phone Number', 'Status', 'Owner', 'Priority', 'DA Contacted',
+  'Out or still with us', 'Action', 'Notes', 'Completed At'
+];
+
+function daysAgo(n) {
+  const d = new Date(Date.now() - n * 86400000);
+  const pad = (v) => String(v).padStart(2, '0');
+  return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() +
+    ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
+const ROWS = [
+  [daysAgo(0), 'Yogeshkumar', 'Savaliya', 'DBE3', '4.1.1 Actual Jobcontract.\n\n4.1.2 Actual confirmation of employer "über ein unbefristetes, bestehendes und ungekündigtes Arbeitsverhältnis".\n\n4.1.4 Attached Form "Erklärung zum Beschäftigungsverhältnis", filled out by your employer', 'REQ-2001', 'whatsapp:+4917630672255', 'To be contacted', '', '', '', '', '', ''],
+  [daysAgo(2), 'Florent', 'Krasniqi', 'DBE2', 'I need a new scanner because mine stopped working yesterday morning', 'REQ-2002', 'whatsapp:+4917600000102', 'To be contacted', '', '', '', '', '', ''],
+  [daysAgo(5), 'Maria', 'Garcia', 'DBE2', 'I want to change my IBAN to DE12 5001 0517 0648 4898 90 because I opened a new bank account', 'REQ-2003', 'whatsapp:+4917600000103', 'In Progress', 'Boris', 'High', 'Phone', '', '', ''],
+  [daysAgo(9), 'Ahmed', 'Hassan', 'DBE3', 'I need login details for Emietarbeiter, I cannot access the portal', 'REQ-2004', 'whatsapp:+4917600000104', 'To be contacted', 'Diana Ionita', 'Normal', '', '', '', ''],
+  [daysAgo(14), 'Nina', 'Braun', 'DBE2', 'Can I request vacation from 15.09.2026 to 22.09.2026?', 'REQ-2005', 'whatsapp:+4917600000105', 'needs to be clarified', '', '', '', '', '', ''],
+  [daysAgo(26), 'Luis', 'Ferreira', 'DBE3', 'My delivery route shows the wrong address for a customer in Prenzlauer Berg', 'REQ-2006', 'whatsapp:+4917600000106', 'To be contacted', '', '', '', '', '', ''],
+  [daysAgo(31), 'Samir', 'Osmani', 'DBE3', 'I need my Lohnabrechnung for last month, it never arrived', 'REQ-2007', 'whatsapp:+4917600000103', 'Not started', '', '', '', '', '', ''],
+  [daysAgo(40), 'Petra', 'Novak', 'DBE2', 'Scanner has GPS problems, it keeps losing the signal on my route', 'REQ-2008', 'whatsapp:+4917600000108', 'To be contacted', 'Pedro Trabbold', 'Urgent', 'WhatsApp', '', '', ''],
+  [daysAgo(3), 'Elena', 'Petrova', 'DBE3', 'Please confirm my contract end date for my landlord', 'REQ-2009', 'whatsapp:+4917600000109', 'Completed', 'Amnery', '', '', '', '', '', daysAgo(1)],
+  [daysAgo(12), 'Tomas', 'Weber', 'DBE2', 'I lost my work phone charger, can I get a replacement?', 'REQ-2010', 'whatsapp:+4917600000110', 'Completed', 'Hugo', '', '', '', '', '', daysAgo(9)],
+  [daysAgo(20), 'Ana', 'Silva', 'DBE3', 'Question about my payslip amount this month, it looks lower than usual', 'REQ-2011', 'whatsapp:+4917600000111', 'Completed', 'Fadi', '', '', '', '', '', daysAgo(16)],
+  [daysAgo(8), 'Ibrahim', 'Kone', 'DBE2', 'Need a confirmation letter for my visa appointment next week', 'REQ-2012', 'whatsapp:+4917600000102', 'To be contacted', '', '', '', '', '', '']
+];
+
+const fake = new FakeSheets({
+  'Driver Requests': [HEADER].concat(ROWS),
+  'Activity Log': [
+    ACTIVITY_HEADERS.slice(),
+    [new Date(Date.now() - 3600000).toISOString(), 'REQ-2003', 'Boris Toma', 'Admin', 'Called the driver, waiting for the new IBAN confirmation.'],
+    [new Date(Date.now() - 1800000).toISOString(), 'REQ-2003', 'Boris Toma', 'Admin', 'Payroll notified.']
+  ]
+});
+
+// ---- wire the demo client into the real server --------------------------
+
+const client = new SheetsClient({
+  spreadsheetId: 'DEMO-SHEET',
+  fetchImpl: fake.fetch,
+  tokenProvider: async () => 'demo-token'
+});
+
+const app = require('./server');
+
+// Swap the repository's sheets client for the fake one.
+app.repo.sheets = client;
+app.repo.cacheMs = 0;
+app.repo.invalidate();
+
+app.app.listen(process.env.PORT, () => {
+  console.log('='.repeat(60));
+  console.log('🧪 Driver Requests Console — DEMO (in-memory sheet)');
+  console.log('   http://localhost:' + process.env.PORT);
+  console.log('   access code: ' + process.env.CONSOLE_ACCESS_CODE);
+  console.log('');
+  console.log('   Nothing here touches the real spreadsheet.');
+  console.log('='.repeat(60));
+});
