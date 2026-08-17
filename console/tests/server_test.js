@@ -185,6 +185,21 @@ async function call(pathname, opts) {
     fake.tabs['Driver Requests'][1][6] === 'whatsapp:+4917630672255',
     fake.tabs['Driver Requests'][1][6]);
 
+  // ---- anonymous visitors get the dashboard, not the gate ----
+  const whoAnon = await call('/api/whoami');
+  check('an anonymous visitor is told the dashboard is open to them',
+    whoAnon.status === 200 && whoAnon.body.authed === false && whoAnon.body.publicDashboard === true,
+    JSON.stringify(whoAnon.body));
+  check('the roster is available before signing in, for the who-picker',
+    Array.isArray(whoAnon.body.owners) && whoAnon.body.owners.length > 0,
+    JSON.stringify(whoAnon.body.owners));
+
+  // ---- sign out (shared terminals) ----
+  const out = await call('/api/logout', { method: 'POST', cookie: fullCookie });
+  check('signing out succeeds', out.status === 200, 'status=' + out.status);
+  check('signing out expires both cookies',
+    /Max-Age=0/.test(out.setCookie || ''), String(out.setCookie));
+
   // ---- shell ----
   const shell = await call('/');
   check('the app shell is served', shell.status === 200 && /Driver Requests/.test(shell.text),

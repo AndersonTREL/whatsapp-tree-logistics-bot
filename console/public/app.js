@@ -179,8 +179,10 @@
           '<span class="synced mono">synced ' + esc(shortTime(state.syncedAt)) + '</span>' +
           (state.saving ? '<span class="synced">saving…</span>' : '') +
           '<button class="avatar-btn" id="whoBtn" title="' +
-            esc(state.actor ? state.actor.name + ' · ' + state.actor.team : 'Choose who you are') + '">' +
-            esc(state.actor ? initials(state.actor.name) : '?') +
+            esc(!state.authed ? 'Enter the team code to open the queue'
+              : state.actor ? state.actor.name + ' · ' + state.actor.team
+              : 'Choose who you are') + '">' +
+            esc(!state.authed ? '\u00b7\u00b7\u00b7' : state.actor ? initials(state.actor.name) : '?') +
           '</button>' +
         '</div>' +
       '</div>' +
@@ -577,11 +579,16 @@
     return '' +
       '<div class="gate"><div class="gate-card">' +
         '<h1>Driver Requests Console</h1>' +
-        '<p>This console shows unedited driver messages and can update the sheet, so it needs the ' +
+        '<p>This part shows unedited driver messages and can update the sheet, so it needs the ' +
         'team access code.</p>' +
         (state.gateError ? '<div class="gate-error">' + esc(state.gateError) + '</div>' : '') +
         '<input id="code" type="password" placeholder="Team access code" autocomplete="current-password">' +
         '<button class="btn-primary" id="enterBtn" style="width:100%">Open console</button>' +
+        (state.publicDashboard
+          ? '<p style="margin:14px 0 0;text-align:center">' +
+            '<button class="btn-secondary" id="toDashBtn" style="width:100%">' +
+            'View the dashboard instead — no code needed</button></p>'
+          : '') +
       '</div></div>';
   }
 
@@ -613,7 +620,14 @@
       return;
     }
 
+    // Anyone with the link can read the dashboard — it is aggregates only. The
+    // Inbox and Sheet layout still need the team code, so those land on the gate.
     if (!state.authed) {
+      if (state.publicDashboard && state.view === 'dashboard') {
+        root.innerHTML = topBar() + dashboardView();
+        wire();
+        return;
+      }
       root.innerHTML = topBar() + gateView();
       wire();
       var code = document.getElementById('code');
@@ -660,7 +674,11 @@
     });
 
     var whoBtn = document.getElementById('whoBtn');
-    if (whoBtn) whoBtn.onclick = function () { state.pickingWho = true; render(); };
+    if (whoBtn) whoBtn.onclick = function () {
+      if (!state.authed) { state.view = 'inbox'; render(); return; } // show the gate
+      state.pickingWho = true;
+      render();
+    };
 
     root.querySelectorAll('[data-who]').forEach(function (el) {
       el.onclick = function () {
@@ -674,6 +692,13 @@
           .catch(showError);
       };
     });
+
+    var toDashBtn = document.getElementById('toDashBtn');
+    if (toDashBtn) toDashBtn.onclick = function () {
+      state.view = 'dashboard';
+      loadDashboard();
+      render();
+    };
 
     var enterBtn = document.getElementById('enterBtn');
     if (enterBtn) {
@@ -838,7 +863,14 @@
         state.ownerGroups = who.owners;
         state.ready = true;
 
-        if (!who.authed) { render(); return; }
+        if (!who.authed) {
+          if (who.publicDashboard) {
+            state.view = 'dashboard';
+            return loadDashboard();
+          }
+          render();
+          return;
+        }
         return refresh(true).then(function () {
           if (!state.selectedId) {
             var first = filtered()[0];

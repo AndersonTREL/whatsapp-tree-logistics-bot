@@ -136,6 +136,13 @@ app.post('/api/session', function (req, res) {
   res.json({ ok: true });
 });
 
+/** Sign out — matters on a shared dispatcher terminal. */
+app.post('/api/logout', function (req, res) {
+  const expire = '=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0';
+  res.setHeader('Set-Cookie', [SESSION_COOKIE + expire, ACTOR_COOKIE + '=; SameSite=Lax; Path=/; Max-Age=0']);
+  res.json({ ok: true });
+});
+
 app.post('/api/actor', requireAuth, function (req, res) {
   const name = String((req.body && req.body.name) || '');
   if (!owners.isAssignable(name)) {
