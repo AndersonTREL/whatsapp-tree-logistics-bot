@@ -1,4 +1,6 @@
 const express = require('express');
+const crypto = require('crypto');
+const twilio = require('twilio');
 const { MessagingResponse } = require('twilio').twiml;
 require('dotenv').config();
 
@@ -9,38 +11,142 @@ const messaging = require('./services/messaging');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const VERSION = '2.1.0-capture-first-message';
+
+// Reject webhooks that Twilio did not sign. Off by default: the signed URL has
+// to be rebuilt exactly as Twilio saw it, and behind Railway's proxy a wrong
+// guess would reject every real driver. Every request is checked and the verdict
+// logged as [SIGCHECK], so the logs prove it is safe before this is switched on.
+const ENFORCE_SIGNATURE = process.env.TWILIO_VALIDATE_SIGNATURE === 'true';
 
 // Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// Drivers are explicitly asked to send their IBAN, so keep it out of routine
+// logs. The REQUEST_NOT_SAVED recovery line still carries the untouched text,
+// because that only fires when a request would otherwise be lost for good.
+function maskIban(text) {
+  return String(text == null ? '' : text).replace(
+    /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?\d{1,3})?\b/gi,
+    (match) => {
+      const compact = match.replace(/\s/g, '');
+      const digits = (compact.match(/\d/g) || []).length;
+      // Real IBANs are 15-34 characters and mostly digits. Anything else that
+      // happens to fit the shape is ordinary prose, so leave it readable.
+      return compact.length >= 15 && compact.length <= 34 && digits >= 8
+        ? '[IBAN redacted]'
+        : match;
+    }
+  );
+}
+
+// Some endpoints can WhatsApp every driver, rewrite the whole Status column, or
+// list every phone number, and they sit on a public URL. Setting ADMIN_SECRET
+// turns them into shared-secret endpoints. Left unset they behave exactly as
+// before, so nothing that calls them today breaks until you opt in.
+const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_SECRET) return next();
+
+  const provided = req.headers['x-admin-secret'] || req.query.secret ||
+    (req.body && req.body.secret) || '';
+  const a = Buffer.from(String(provided));
+  const b = Buffer.from(ADMIN_SECRET);
+
+  if (a.length === b.length && crypto.timingSafeEqual(a, b)) return next();
+
+  console.warn(`⚠️ Blocked unauthenticated admin call to ${req.originalUrl}`);
+  return res.status(403).json({ success: false, error: 'Forbidden' });
+}
+
+// Rebuild the URL Twilio signed and check the signature against it.
+function verifyTwilioSignature(req) {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.headers['x-twilio-signature'];
+
+  if (!authToken) return { checked: false, reason: 'no_auth_token' };
+  if (!signature) return { checked: true, valid: false, reason: 'missing_signature' };
+
+  // Railway terminates TLS, so req.protocol/host describe the internal hop.
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const url = `${proto}://${host}${req.originalUrl}`;
+
+  try {
+    const valid = twilio.validateRequest(authToken, signature, url, req.body || {});
+    return { checked: true, valid, reason: valid ? 'ok' : 'mismatch', url };
+  } catch (error) {
+    return { checked: true, valid: false, reason: `error:${error.message}`, url };
+  }
+}
+
 // Simple message handler - collects all info in one message
 async function handleMessage(body, from, profileName) {
   const message = body.trim();
   
-  console.log(`📱 Received from ${from}: "${message}"`);
+  console.log(`📱 Received from ${from}: "${maskIban(message)}"`);
   
   // Check for active conversation flow
   const flowState = conversationFlow.getFlowState(from);
-  
+
   if (flowState) {
     return await handleActiveFlow(flowState, message, from, profileName);
   }
-  
+
   // Start the simple data collection flow
-  return await startDataCollectionFlow(from, profileName);
+  return await startDataCollectionFlow(from, profileName, message);
 }
 
+// Openers that carry no request of their own — treating one of these as the
+// driver's request would put "Hallo" in the sheet instead of what they need.
+const GREETING_ONLY = /^(hi+|hey+|hello+|hallo+|halo|guten\s+(tag|morgen|abend)|moin|servus|good\s+(morning|afternoon|evening|day)|salam|salaam|assalamu\s*alaikum|merhaba|ola|bom\s+dia|boa\s+tarde|bonjour|ciao|salut|namaste|start|help|hilfe|info|test|ok|okay|thanks|thank\s+you|danke|guten\s+tag\s+team)$/i;
+
+// Does this message look like an actual request, rather than a greeting or the
+// driver's name and station?
+function looksLikeRequest(message) {
+  const text = (message || '').trim();
+
+  if (text.length < 15) return false;
+
+  // Compare against the greeting list with punctuation and emoji stripped, so
+  // "Hallo!! 👋" is still recognised as a greeting.
+  const core = text.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+  if (GREETING_ONLY.test(core)) return false;
+
+  // Name + station is identification, not a request.
+  if (parseDriverInfo(text).isValid) return false;
+
+  return text.split(/\s+/).filter(Boolean).length >= 3;
+}
 
 // Start data collection flow - asks for all 3 pieces of info at once
-async function startDataCollectionFlow(from, profileName) {
+async function startDataCollectionFlow(from, profileName, firstMessage) {
+  // A driver who opens with their actual request must not have to type it a
+  // second time — hold it and submit it the moment we know who they are.
+  // This is also what saves a request sent while the bot was restarting, since
+  // a restart wipes the in-memory flow and lands the driver back here.
+  const pendingRequest = looksLikeRequest(firstMessage) ? firstMessage.trim() : null;
+
   conversationFlow.startFlow(from, {
     step: 'data_collection',
     profileName: profileName,
-    flow: 'data_collection'
+    flow: 'data_collection',
+    pendingRequest: pendingRequest
   });
-  
-  return `🌳 Welcome to Tree Logistics Office Support! 
+
+  if (pendingRequest) {
+    console.log(`📌 Holding opening request from ${from} until they identify themselves`);
+
+    return `🌳 Welcome to Tree Logistics Office Support!
+
+We have your message and it is safe — we just need to know who you are before we send it to the office.
+
+Please reply with your first name, last name, and the station where you work (DBE2, DBE3).`;
+  }
+
+  return `🌳 Welcome to Tree Logistics Office Support!
 
 We are glad that you reached out! To get started, please provide your first name, last name, and the station where you work (DBE2, DBE3).`;
 }
@@ -52,15 +158,22 @@ async function handleDataCollection(message, from, data) {
     const parsedData = parseDriverInfo(message);
     
     if (!parsedData.isValid) {
-      return `❌ Please provide the information in the correct format:
+      // Say which piece is missing — "wrong format" alone leaves drivers guessing.
+      if (parsedData.error === 'name_incomplete') {
+        return `📝 Thanks! We also need your last name.
 
-📝 **First Name**
-📝 **Last Name** 
-🏢 **Station** (DBE3 or DBE2)
+Please send your first name, last name and station together, for example:
+John Smith DBE2`;
+      }
 
-Please try again.`;
+      return `📝 We still need your station, so your request reaches the right team.
+
+Please send your first name, last name and station together, for example:
+John Smith DBE2
+
+🏢 Station: DBE2 or DBE3`;
     }
-    
+
     // Now ask for their request/question
     conversationFlow.updateFlow(from, {
       ...data,
@@ -69,7 +182,16 @@ Please try again.`;
       station: parsedData.station,
       step: 'request_collection'
     });
-    
+
+    // They already told us what they need before identifying themselves — submit
+    // it now rather than asking them to type it again.
+    if (data.pendingRequest) {
+      console.log(`📌 Submitting held request for ${parsedData.firstName} ${parsedData.lastName}`);
+
+      const { step, ...identified } = conversationFlow.getFlowState(from) || {};
+      return await handleRequestCollection(data.pendingRequest, from, identified);
+    }
+
     return `---------
 ✅ Perfect! ${parsedData.firstName} ${parsedData.lastName}, from ${parsedData.station} 📍
 
@@ -102,35 +224,29 @@ Please try again.`;
 
 // Parse driver information from a single message
 function parseDriverInfo(message) {
-  const words = message.trim().split(/\s+/);
-  
-  if (words.length < 3) {
-    return { isValid: false, error: 'Not enough information provided' };
-  }
-  
-  // Find the station (DBE3 or DBE2)
-  const stationIndex = words.findIndex(word => 
-    word.toUpperCase() === 'DBE3' || word.toUpperCase() === 'DBE2'
-  );
-  
+  const words = (message || '').trim().split(/\s+/).filter(Boolean);
+
+  // Drivers write the station before, after and in the middle of their name, so
+  // find it wherever it is rather than assuming it comes last. Taking only the
+  // words before it used to drop the surname of anyone who wrote
+  // "Luis DBE3 Ferreira".
+  const stationIndex = words.findIndex(word => /^(DBE2|DBE3)[.,;:]?$/i.test(word));
+
   if (stationIndex === -1) {
-    return { isValid: false, error: 'Station not found. Please specify DBE3 or DBE2' };
+    return { isValid: false, error: 'station_missing' };
   }
-  
-  // Extract first name, last name, and station
-  const firstName = words[0];
-  const lastName = words.slice(1, stationIndex).join(' ');
-  const station = words[stationIndex].toUpperCase();
-  
-  // Validate station
-  if (station !== 'DBE3' && station !== 'DBE2') {
-    return { isValid: false, error: 'Invalid station. Please specify DBE3 or DBE2' };
+
+  const station = words[stationIndex].toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const nameWords = words.filter((_, index) => index !== stationIndex);
+
+  if (nameWords.length < 2) {
+    return { isValid: false, error: 'name_incomplete' };
   }
-  
+
   return {
     isValid: true,
-    firstName: firstName,
-    lastName: lastName,
+    firstName: nameWords[0],
+    lastName: nameWords.slice(1).join(' '),
     station: station
   };
 }
@@ -139,7 +255,7 @@ function parseDriverInfo(message) {
 function detectRequestType(requestText) {
   const text = requestText.trim().toLowerCase();
   
-  console.log(`[DETECT] Analyzing text: "${text}"`);
+  console.log(`[DETECT] Analyzing text: "${maskIban(text)}"`);
   
   // IBAN/Bank account change
   if (/\b(iban|bank\s+account|account\s+number|change\s+iban|update\s+iban|new\s+iban)\b/i.test(text)) {
@@ -178,7 +294,7 @@ function validateRequestText(requestText, retryCount = 0) {
   const textLower = text.toLowerCase();
   const words = text.split(/\s+/).filter(word => word.length > 0);
   
-  console.log(`[VALIDATION] Validating: "${text}" (retry: ${retryCount})`);
+  console.log(`[VALIDATION] Validating: "${maskIban(text)}" (retry: ${retryCount})`);
   
   // After 1 retry, accept the request anyway (don't frustrate users)
   const MAX_RETRIES = 1;
@@ -309,7 +425,7 @@ async function handleRequestCollection(message, from, data) {
     
     console.log(`\n========== REQUEST VALIDATION START ==========`);
     console.log(`📱 User: ${data.firstName} ${data.lastName} (${from})`);
-    console.log(`📝 Request text: "${requestText}"`);
+    console.log(`📝 Request text: "${maskIban(requestText)}"`);
     console.log(`🔄 Retry count: ${retryCount}`);
     
     // Validate the request text (contextual and helpful validation)
@@ -348,7 +464,7 @@ async function handleRequestCollection(message, from, data) {
     let fullRequestText = requestText;
     if (data.originalRequest && data.originalRequest !== requestText) {
       fullRequestText = `${data.originalRequest} | ${requestText}`;
-      console.log(`📝 Combined request: "${fullRequestText}"`);
+      console.log(`📝 Combined request: "${maskIban(fullRequestText)}"`);
     }
 
     // Request is valid - save it
@@ -389,19 +505,19 @@ If it fails again, please contact the office directly so your request is not los
 
 // Updated handleActiveFlow to handle request collection
 async function handleActiveFlow(flowState, message, from, profileName) {
-  console.log(`📱 Handling active flow:`, flowState);
-  
   const { step, ...data } = flowState;
-  
+
+  console.log(`📱 Active flow for ${from}: step=${step}, identified=${!!data.firstName}`);
+
   if (step === 'data_collection') {
     return await handleDataCollection(message, from, data);
   }
-  
+
   if (step === 'request_collection') {
     return await handleRequestCollection(message, from, data);
   }
-  
-  return await startDataCollectionFlow(from, profileName);
+
+  return await startDataCollectionFlow(from, profileName, message);
 }
 
 // Save request to Google Sheets with only the 4 required fields
@@ -463,20 +579,26 @@ app.get('/webhook/whatsapp', (req, res) => {
 // WhatsApp webhook endpoint - POST for messages
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
-    console.log('📥 Webhook received:', {
-      method: req.method,
-      url: req.url,
-      headers: req.headers,
-      body: req.body
-    });
-    
     // Twilio sends form-encoded data with capitalized field names
     const body = req.body.Body || req.body.body || '';
     const from = req.body.From || req.body.from;
     const profileName = req.body.ProfileName || req.body.profileName || 'User';
-    
-    console.log('📱 Parsed webhook data:', { body, from, profileName });
-    
+    const messageSid = req.body.MessageSid || req.body.SmsMessageSid || 'no-sid';
+
+    // The old handler dumped every header and the whole body, which put driver
+    // IBANs into the logs several times per message. One compact line instead.
+    console.log(`📥 Webhook ${messageSid} from ${from || 'unknown'} (${profileName}), ${body.length} chars`);
+
+    const signature = verifyTwilioSignature(req);
+    if (signature.checked && !signature.valid) {
+      console.warn(`⚠️ [SIGCHECK] REJECTED-${signature.reason} url=${signature.url || req.originalUrl} enforcing=${ENFORCE_SIGNATURE}`);
+      if (ENFORCE_SIGNATURE) {
+        return res.status(403).send('Invalid Twilio signature');
+      }
+    } else if (signature.checked) {
+      console.log('✅ [SIGCHECK] OK');
+    }
+
     if (!body || !from) {
       console.error('❌ Missing required parameters:', { body: !!body, from: !!from });
       return res.status(400).send('Missing required parameters');
@@ -486,9 +608,9 @@ app.post('/webhook/whatsapp', async (req, res) => {
     
     const twiml = new MessagingResponse();
     twiml.message(responseMessage);
-    
-    console.log('✅ Sending response:', responseMessage);
-    
+
+    console.log(`✅ Replied to ${messageSid} (${responseMessage.length} chars)`);
+
     res.writeHead(200, { 
       'Content-Type': 'text/xml; charset=utf-8',
       'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -532,8 +654,11 @@ app.get('/', (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
+    version: VERSION,
+    signatureEnforced: ENFORCE_SIGNATURE,
+    activeFlows: conversationFlow.getActiveFlowsCount(),
     timestamp: new Date().toISOString()
   });
 });
@@ -566,13 +691,13 @@ app.post('/test-validation', (req, res) => {
 });
 
 // Clear flows endpoint (for debugging)
-app.post('/clear-flows', (req, res) => {
+app.post('/clear-flows', requireAdmin, (req, res) => {
   conversationFlow.clearAllFlows();
   res.json({ success: true, message: 'All conversation flows cleared' });
 });
 
 // Normalize statuses endpoint (fixes filtering issues)
-app.post('/normalize-statuses', async (req, res) => {
+app.post('/normalize-statuses', requireAdmin, async (req, res) => {
   try {
     const result = await googleSheets.normalizeAllStatuses();
     res.json({ 
@@ -590,7 +715,7 @@ app.post('/normalize-statuses', async (req, res) => {
 });
 
 // Force fix all "Completed" statuses
-app.post('/fix-completed-statuses', async (req, res) => {
+app.post('/fix-completed-statuses', requireAdmin, async (req, res) => {
   try {
     const result = await googleSheets.fixCompletedStatuses();
     res.json({ 
@@ -608,7 +733,7 @@ app.post('/fix-completed-statuses', async (req, res) => {
 });
 
 // Force fix ALL statuses to exact matches
-app.post('/force-fix-all-statuses', async (req, res) => {
+app.post('/force-fix-all-statuses', requireAdmin, async (req, res) => {
   try {
     const result = await googleSheets.forceFixAllStatuses();
     res.json({ 
@@ -640,7 +765,7 @@ app.get('/status-diagnostics', async (req, res) => {
 });
 
 // Broadcast message endpoint - send message to all users who submitted requests
-app.post('/broadcast', async (req, res) => {
+app.post('/broadcast', requireAdmin, async (req, res) => {
   try {
     const { message } = req.body;
 
@@ -705,7 +830,7 @@ app.post('/broadcast', async (req, res) => {
 });
 
 // Get list of all unique phone numbers (for preview before broadcast)
-app.get('/broadcast/recipients', async (req, res) => {
+app.get('/broadcast/recipients', requireAdmin, async (req, res) => {
   try {
     const phoneNumbers = await googleSheets.getUniquePhoneNumbers();
     
@@ -724,7 +849,7 @@ app.get('/broadcast/recipients', async (req, res) => {
 });
 
 // Format sheet endpoint - apply professional styling
-app.post('/format-sheet', async (req, res) => {
+app.post('/format-sheet', requireAdmin, async (req, res) => {
   try {
     const result = await googleSheets.formatSheet();
     res.json(result);
@@ -741,7 +866,7 @@ app.post('/format-sheet', async (req, res) => {
 app.listen(PORT, () => {
   console.log('='.repeat(50));
   console.log(`🚀 Tree Logistics WhatsApp Bot running on port ${PORT}`);
-  console.log(`📦 Version: 2.0.0-validation-fix`);
+  console.log(`📦 Version: ${VERSION}`);
   console.log(`🕐 Started: ${new Date().toISOString()}`);
   console.log('='.repeat(50));
   console.log(`📱 Webhook: POST http://localhost:${PORT}/webhook/whatsapp`);
@@ -754,6 +879,9 @@ app.listen(PORT, () => {
   console.log('  ✅ Vacation requests require dates');
   console.log('  ✅ Scanner requests require status (working/broken)');
   console.log('  ✅ IBAN changes require new IBAN number');
+  console.log('='.repeat(50));
+  console.log(`  - Twilio signature enforcement: ${ENFORCE_SIGNATURE ? '✅ ON' : '⚠️  log-only (set TWILIO_VALIDATE_SIGNATURE=true to enforce)'}`);
+  console.log(`  - Admin endpoint secret: ${ADMIN_SECRET ? '✅ required' : '⚠️  NOT SET — /broadcast and status-rewrite endpoints are public'}`);
   console.log('='.repeat(50));
   console.log('Environment check:');
   console.log(`  - PORT: ${PORT}`);
