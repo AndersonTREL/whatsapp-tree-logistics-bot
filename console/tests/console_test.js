@@ -525,6 +525,91 @@ const ACTOR = { name: 'Anderson Meta', team: 'Admin' };
     assert.strictEqual(request.status, 'In Progress');
   });
 
+  // ---- cost of a change (these guard the responsiveness of the dropdowns) ----
+
+  await checkAsync('a triage change returns the updated request, so no reload is needed', async () => {
+    const { repo } = buildRepo();
+    repo.cacheMs = 60000;
+    await repo.snapshot(true);
+
+    const res = await repo.applyTriage('REQ-1001', { status: 'In Progress', owner: 'Diana Ionita' }, ACTOR);
+    assert.ok(res.request, 'no request returned');
+    assert.strictEqual(res.request.id, 'REQ-1001');
+    assert.strictEqual(res.request.status, 'In Progress');
+    assert.strictEqual(res.request.owner, 'Diana Ionita');
+    assert.ok(res.request.activity.length >= 2, 'activity should be attached');
+    assert.strictEqual(res.request.activity[0].text, 'Assigned to Diana Ionita.', 'newest first');
+  });
+
+  await checkAsync('reading straight after a write costs no further API calls', async () => {
+    const { repo, fake } = buildRepo();
+    repo.cacheMs = 60000;
+    await repo.snapshot(true);
+    await repo.applyTriage('REQ-1001', { status: 'In Progress' }, ACTOR);
+
+    const before = fake.requestCount;
+    const request = await repo.getRequest('REQ-1001');
+    assert.strictEqual(fake.requestCount, before, 'the cache should have been patched, not dropped');
+    assert.strictEqual(request.status, 'In Progress', 'and it must reflect the write');
+  });
+
+  await checkAsync('several fields changed at once cost one append, not one each', async () => {
+    const { repo, fake } = buildRepo({ withActivityTab: true });
+    repo.cacheMs = 60000;
+    await repo.snapshot(true);
+
+    const before = fake.requestCount;
+    await repo.applyTriage('REQ-1001', {
+      status: 'In Progress', owner: 'Diana Ionita', priority: 'High', contacted: 'Phone'
+    }, ACTOR);
+    const calls = fake.requestCount - before;
+
+    // Row lookup + cell write + one batched append.
+    assert.strictEqual(calls, 3, 'expected 3 API calls, got ' + calls);
+    assert.strictEqual(fake.appends.length, 4, 'all four notes must still be recorded');
+  });
+
+  await checkAsync('the tab list is fetched once, not before every append', async () => {
+    const { repo, client, fake } = buildRepo({ withActivityTab: true });
+    repo.cacheMs = 60000;
+    await repo.snapshot(true);
+
+    await repo.logAction('REQ-1001', 'First note', ACTOR);
+    await repo.logAction('REQ-1001', 'Second note', ACTOR);
+    await repo.logAction('REQ-1001', 'Third note', ACTOR);
+
+    assert.ok(client._titleCache, 'titles should be cached');
+    assert.strictEqual(fake.appends.length, 3, 'all three notes written');
+  });
+
+  await checkAsync('creating the activity tab still refreshes the cached tab list', async () => {
+    const { repo, client, fake } = buildRepo(); // no Activity Log tab yet
+    repo.cacheMs = 60000;
+    await repo.snapshot(true);
+
+    await repo.logAction('REQ-1001', 'First ever note', ACTOR);
+    assert.ok(fake.created.includes('Activity Log'));
+
+    // A stale cache here would make the next append target a tab we think is absent.
+    const titles = await client.sheetTitles();
+    assert.ok(titles.includes('Activity Log'), 'cache must include the new tab');
+  });
+
+  await checkAsync('a failed write leaves the cache untouched', async () => {
+    const { repo, fake } = buildRepo();
+    repo.cacheMs = 60000;
+    await repo.snapshot(true);
+
+    await assert.rejects(
+      () => repo.applyTriage('REQ-1001', { status: 'Nonsense' }, ACTOR),
+      /Unknown status/
+    );
+
+    const request = await repo.getRequest('REQ-1001');
+    assert.strictEqual(request.status, 'To be contacted', 'must not show a change that never happened');
+    assert.strictEqual(fake.writes.length, 0);
+  });
+
   // ---- summary ----
   const failed = results.filter((r) => !r.pass);
   process.stdout.write('\n' + (results.length - failed.length) + '/' + results.length + ' checks passed\n');

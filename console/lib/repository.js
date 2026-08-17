@@ -184,19 +184,50 @@ class Repository {
       notes.push(next ? describeSet(next) : describeClear());
     }
 
-    if (cells.length === 0) return { changed: false, activity: [] };
+    if (cells.length === 0) return { changed: false, activity: [], request: before };
 
     const result = await this.sheets.updateCells(requestId, cells);
 
     // Every triage change is also an activity entry, so the log explains how a
-    // request reached its current state.
-    const logged = [];
-    for (const text of notes) {
-      logged.push(await this._appendActivity(requestId, text, actor));
+    // request reached its current state. All of them go in one append.
+    const logged = await this._appendActivity(requestId, notes, actor);
+
+    // Patch the cached snapshot rather than throwing it away. Discarding it meant
+    // the caller had to re-read all ~600 rows just to see the change it had made.
+    const updated = this._patchCached(requestId, changes, logged);
+
+    return { changed: true, row: result.row, activity: logged, request: updated || before };
+  }
+
+  /**
+   * Applies a just-written change to the cached snapshot, so the next read does
+   * not need a Sheets round trip. Falls back to invalidating if there is no cache
+   * to patch.
+   */
+  _patchCached(requestId, changes, loggedEntries) {
+    if (!this._cache) return null;
+
+    const request = this._cache.requests.find(function (r) { return r.id === requestId; });
+    if (!request) { this.invalidate(); return null; }
+
+    ['status', 'priority', 'category', 'contacted'].forEach(function (field) {
+      if (changes[field] != null) request[field] = String(changes[field]).trim();
+    });
+
+    if (changes.owner != null) {
+      request.ownerRaw = String(changes.owner).trim();
+      request.owner = owners.normalizeOwner(request.ownerRaw);
     }
 
-    this.invalidate();
-    return { changed: true, row: result.row, activity: logged };
+    if (loggedEntries && loggedEntries.length) {
+      request.activity = loggedEntries.concat(request.activity || []);
+    }
+
+    // A status change can flip a request between open and closed, which changes
+    // the duplicate grouping.
+    model.markDuplicates(this._cache.requests);
+
+    return request;
   }
 
   /** Free-text action note from the composer. Empty input is a no-op. */
@@ -211,21 +242,30 @@ class Repository {
       throw err;
     }
 
-    const entry = await this._appendActivity(requestId, body, actor);
-    this.invalidate();
-    return { changed: true, activity: [entry] };
+    const logged = await this._appendActivity(requestId, [body], actor);
+    const updated = this._patchCached(requestId, {}, logged);
+
+    return { changed: true, activity: logged, request: updated || request };
   }
 
-  async _appendActivity(requestId, text, actor) {
-    const entry = {
-      requestId: requestId,
-      loggedAt: this.now().toISOString(),
-      author: (actor && actor.name) || 'Unknown',
-      team: (actor && actor.team) || '',
-      text: text
-    };
-    await this.sheets.appendActivity(entry);
-    return { when: entry.loggedAt, who: entry.author, team: entry.team, text: entry.text };
+  async _appendActivity(requestId, texts, actor) {
+    const list = (Array.isArray(texts) ? texts : [texts]).filter(Boolean);
+    if (list.length === 0) return [];
+
+    const loggedAt = this.now().toISOString();
+    const author = (actor && actor.name) || 'Unknown';
+    const team = (actor && actor.team) || '';
+
+    const entries = list.map(function (text) {
+      return { requestId: requestId, loggedAt: loggedAt, author: author, team: team, text: text };
+    });
+
+    await this.sheets.appendActivity(entries);
+
+    // Newest first, matching how the detail pane renders them.
+    return entries.map(function (e) {
+      return { when: e.loggedAt, who: e.author, team: e.team, text: e.text };
+    }).reverse();
   }
 
   async dashboard() {

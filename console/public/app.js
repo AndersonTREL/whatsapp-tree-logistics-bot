@@ -874,9 +874,13 @@
         render();
         api('/api/requests/' + encodeURIComponent(id) + '/activity', {
           method: 'POST', body: JSON.stringify({ text: text })
-        }).then(function () {
+        }).then(function (res) {
           state.draft = '';
-          return refresh(true);
+          if (res && res.request) {
+            for (var i = 0; i < state.requests.length; i++) {
+              if (state.requests[i].id === id) { state.requests[i] = res.request; break; }
+            }
+          }
         }).catch(showError).finally(function () {
           state.saving = false;
           render();
@@ -896,9 +900,25 @@
 
   // ---------------------------------------------------------------- actions
 
+  /**
+   * Applies a triage change optimistically: the dropdown shows the new value at
+   * once and the write happens behind it. Previously the UI waited for the write
+   * AND a full reload of every request before showing anything, which is why a
+   * dropdown appeared to hang for a second or two.
+   *
+   * If the write fails the change is put back and the error is shown, so the
+   * screen never keeps a value the sheet does not have.
+   */
   function saveTriage(patch) {
     var id = state.selectedId;
-    if (!id) return;
+    var request = selected();
+    if (!id || !request) return;
+
+    var previous = {};
+    Object.keys(patch).forEach(function (key) { previous[key] = request[key]; });
+
+    Object.keys(patch).forEach(function (key) { request[key] = patch[key]; });
+    if (patch.owner != null) request.owner = patch.owner || 'Unassigned';
 
     state.saving = true;
     state.error = null;
@@ -907,8 +927,18 @@
     api('/api/requests/' + encodeURIComponent(id) + '/triage', {
       method: 'POST', body: JSON.stringify(patch)
     })
-      .then(function () { return refresh(true); })
-      .catch(showError)
+      .then(function (res) {
+        // Prefer the server's version — it carries the activity entries it wrote.
+        if (res && res.request) {
+          for (var i = 0; i < state.requests.length; i++) {
+            if (state.requests[i].id === id) { state.requests[i] = res.request; break; }
+          }
+        }
+      })
+      .catch(function (err) {
+        Object.keys(previous).forEach(function (key) { request[key] = previous[key]; });
+        showError(err);
+      })
       .finally(function () { state.saving = false; render(); });
   }
 

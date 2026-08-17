@@ -130,6 +130,7 @@ class SheetsClient {
 
     this._jwt = null;
     this._headerCache = null;
+    this._titleCache = null;
   }
 
   /** Cached service-account client. google-auth-library refreshes the token itself. */
@@ -184,10 +185,19 @@ class SheetsClient {
     return (body && body.values) || [];
   }
 
-  /** Tab titles present in the spreadsheet. */
-  async sheetTitles() {
+  /**
+   * Tab titles present in the spreadsheet.
+   *
+   * Cached: this used to be re-fetched before every single activity append, which
+   * cost a Sheets round trip per triage change to re-learn something that cannot
+   * change under us — tabs are only added by this class, which refreshes the cache.
+   */
+  async sheetTitles(force) {
+    if (!force && this._titleCache) return this._titleCache;
+
     const body = await this._request('?fields=sheets.properties.title');
-    return ((body && body.sheets) || []).map(function (s) { return s.properties.title; });
+    this._titleCache = ((body && body.sheets) || []).map(function (s) { return s.properties.title; });
+    return this._titleCache;
   }
 
   /**
@@ -329,6 +339,7 @@ class SheetsClient {
       { method: 'PUT', body: { values: [ACTIVITY_HEADERS] } }
     );
 
+    this._titleCache = null; // the tab list just changed
     return true;
   }
 
@@ -336,24 +347,31 @@ class SheetsClient {
    * Appends one activity row. Append-only: nothing here is ever updated or
    * deleted, which is what makes the log usable as an audit trail.
    */
-  async appendActivity(entry) {
+  async appendActivity(entryOrEntries) {
+    const entries = Array.isArray(entryOrEntries) ? entryOrEntries : [entryOrEntries];
+    if (entries.length === 0) return [];
+
     await this.ensureActivitySheet();
 
-    const row = [
-      entry.loggedAt || new Date().toISOString(),
-      entry.requestId || '',
-      entry.author || '',
-      entry.team || '',
-      entry.text || ''
-    ];
+    const rows = entries.map(function (entry) {
+      return [
+        entry.loggedAt || new Date().toISOString(),
+        entry.requestId || '',
+        entry.author || '',
+        entry.team || '',
+        entry.text || ''
+      ];
+    });
 
+    // One call for all of them. Changing four triage fields used to mean four
+    // separate appends, and therefore four round trips.
     await this._request(
       '/values/' + encodeURIComponent(quoteSheet(this.activitySheetName) + '!A:E') +
       ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
-      { method: 'POST', body: { values: [row] } }
+      { method: 'POST', body: { values: rows } }
     );
 
-    return row;
+    return rows;
   }
 
   /** All activity rows, newest first, grouped by request ID. */
