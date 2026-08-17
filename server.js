@@ -369,8 +369,12 @@ function detectRequestType(requestText) {
   return 'general';
 }
 
+// What counts as a broken item, in the driver's own words.
+const BROKEN_PATTERN = /\b(broken|not\s+working|doesn't\s+work|stopped|dead|faulty|defective|doesn't\s+turn\s+on|won't\s+work)\b/i;
+
 // Validate request text - contextual and helpful validation
-function validateRequestText(requestText, retryCount = 0) {
+function validateRequestText(requestText, retryCount = 0, clientKey = 'amazon') {
+  const clientConfig = clients.clientConfig(clientKey);
   const text = requestText.trim();
   const textLower = text.toLowerCase();
   const words = text.split(/\s+/).filter(word => word.length > 0);
@@ -381,10 +385,21 @@ function validateRequestText(requestText, retryCount = 0) {
   const MAX_RETRIES = 1;
   if (retryCount >= MAX_RETRIES) {
     console.log(`[VALIDATION] Max retries reached, accepting request`);
+
+    // Accepting early used to skip type detection entirely, so a driver whose
+    // second message was "it is broken" got a confirmation with no idea how to
+    // get a replacement. Still attach the instruction when the answer makes it
+    // clear something is broken.
+    const type = detectRequestType(text);
+    const isEquipment = type === 'scanner' || type === 'equipment';
+
     return {
       isValid: true,
       warning: true,
-      message: null
+      message: null,
+      helpfulInfo: isEquipment && BROKEN_PATTERN.test(text)
+        ? clientConfig.replacementInstruction
+        : undefined
     };
   }
 
@@ -417,10 +432,9 @@ function validateRequestText(requestText, retryCount = 0) {
   // Scanner Request - ask if it still works (only on first attempt)
   if (requestType === 'scanner') {
     console.log(`[VALIDATION] Scanner request detected, checking status...`);
-    const brokenPattern = /\b(broken|not\s+working|doesn't\s+work|stopped|dead|faulty|defective|doesn't\s+turn\s+on|won't\s+work)\b/i;
     const workingPattern = /\b(working|works|fine|ok|okay|good|still\s+works)\b/i;
-    
-    const isBroken = brokenPattern.test(text);
+
+    const isBroken = BROKEN_PATTERN.test(text);
     const isWorking = workingPattern.test(text);
     
     console.log(`[VALIDATION] Scanner - isBroken: ${isBroken}, isWorking: ${isWorking}`);
@@ -431,7 +445,7 @@ function validateRequestText(requestText, retryCount = 0) {
       return {
         isValid: true,
         requestType: 'scanner',
-        helpfulInfo: "Please come to the office tomorrow to get a new scanner. We'll have one ready for you."
+        helpfulInfo: clientConfig.replacementInstruction
       };
     }
     
@@ -441,7 +455,7 @@ function validateRequestText(requestText, retryCount = 0) {
       return {
         isValid: false,
         reason: 'scanner_status',
-        message: `📝 Is your scanner still working, or is it broken?\n\nIf it's broken: Please come to the office tomorrow to get a new scanner. We'll have one ready for you.\n\nIf it's still working: Let us know what the issue is and we'll help you.\n\n(Send any message again to save your request as-is)`
+        message: `📝 Is your scanner still working, or is it broken?\n\nIf it's broken: ${clientConfig.replacementInstruction}\n\nIf it's still working: Let us know what the issue is and we'll help you.\n\n(Send any message again to save your request as-is)`
       };
     }
     
@@ -510,7 +524,9 @@ async function handleRequestCollection(message, from, data) {
     console.log(`🔄 Retry count: ${retryCount}`);
     
     // Validate the request text (contextual and helpful validation)
-    const validation = validateRequestText(requestText, retryCount);
+    // Which contract this driver is on decides how a replacement is arranged.
+    const clientKey = data.client || clients.clientOfStation(data.station) || 'amazon';
+    const validation = validateRequestText(requestText, retryCount, clientKey);
     
     console.log(`🔍 Validation result:`, JSON.stringify(validation, null, 2));
     
@@ -765,7 +781,7 @@ app.post('/test-validation', (req, res) => {
     return res.json({ error: 'Please provide a message in the request body' });
   }
   
-  const validation = validateRequestText(message, 0);
+  const validation = validateRequestText(message, 0, req.body.client || 'amazon');
   
   res.json({
     message: message,

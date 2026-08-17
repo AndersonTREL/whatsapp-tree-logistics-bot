@@ -410,6 +410,47 @@ async function main() {
       row ? JSON.stringify({ s: row.station, r: row.request }) : `no row; reply: ${r.text}`);
   }
 
+  // === Scenario 19: a broken item is routed differently per contract ===
+  {
+    // Amazon: collect it from the office.
+    const pA = nextPhone();
+    await send(pA, 'Hi');
+    await send(pA, 'Peter Klein DBE2');
+    const amazonAsk = await send(pA, 'I need a scanner');
+    const amazonDone = await send(pA, 'it is broken completely');
+
+    check('S19 Amazon is told to come to the office',
+      /come to the office/i.test(amazonAsk.text), amazonAsk.text);
+    check('S19 Amazon is not sent to a Team Leader',
+      !/team leader/i.test(amazonAsk.text) && !/team leader/i.test(amazonDone.text),
+      amazonAsk.text);
+
+    // VOI: go through the Team Leader / Lead Driver.
+    const pV = nextPhone();
+    await send(pV, 'Hi');
+    await send(pV, 'Marta Kowalska VOI Berlin');
+    const voiAsk = await send(pV, 'I need a scanner');
+    const voiDone = await send(pV, 'it is broken completely');
+
+    check('S19 VOI is sent to their Team Leader / Lead Driver',
+      /Team Leader \/ Lead Driver/i.test(voiAsk.text), voiAsk.text);
+    check('S19 VOI is never told to come to the office',
+      !/come to the office/i.test(voiAsk.text) && !/come to the office/i.test(voiDone.text),
+      voiAsk.text + ' || ' + voiDone.text);
+
+    // And the instruction is repeated on the confirmation, per contract.
+    check('S19 the confirmation carries the right instruction for each',
+      /come to the office/i.test(amazonDone.text) && /Team Leader/i.test(voiDone.text),
+      'amazon=' + amazonDone.text.slice(0, 160) + ' || voi=' + voiDone.text.slice(0, 160));
+
+    // Both still reach the sheet.
+    const rowA = saved.find((s) => s.phoneNumber === pA);
+    const rowV = saved.find((s) => s.phoneNumber === pV);
+    check('S19 both broken-item requests still get saved',
+      !!rowA && !!rowV && rowA.station === 'DBE2' && rowV.station === 'VOI Berlin',
+      JSON.stringify({ a: rowA && rowA.station, v: rowV && rowV.station }));
+  }
+
   // ---- summary ----
   const failed = results.filter((r) => !r.pass);
   process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed\n`);

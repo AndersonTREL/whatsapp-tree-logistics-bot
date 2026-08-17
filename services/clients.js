@@ -46,6 +46,17 @@ const SHARED_EXAMPLES = [
 
 const SHARED_CLOSING = 'Everything that is not an on-the-road issue, you can request here.';
 
+/**
+ * How a driver gets a physical replacement. This genuinely differs: Amazon
+ * drivers collect from the office, VOI drivers go through their Team Leader or
+ * Lead Driver. Telling a VOI driver to come to the office would send them to the
+ * wrong place, so this is per contract even though the questions are shared.
+ */
+const REPLACEMENT_INSTRUCTIONS = {
+  amazon: "Please come to the office tomorrow to get a new scanner. We'll have one ready for you.",
+  voi: 'Please contact your Team Leader / Lead Driver — they will arrange the replacement with you.'
+};
+
 const CLIENTS = {
   amazon: {
     key: 'amazon',
@@ -53,14 +64,16 @@ const CLIENTS = {
     /** What to call the location when asking for it. */
     locationNoun: 'station',
     /** Shown when the bot asks who the driver is. */
-    locationHint: 'DBE2 or DBE3'
+    locationHint: 'DBE2 or DBE3',
+    replacementInstruction: REPLACEMENT_INSTRUCTIONS.amazon
   },
 
   voi: {
     key: 'voi',
     label: 'VOI',
     locationNoun: 'city',
-    locationHint: VOI_CITIES.slice(0, 3).join(', ') + '…'
+    locationHint: VOI_CITIES.slice(0, 3).join(', ') + '…',
+    replacementInstruction: REPLACEMENT_INSTRUCTIONS.voi
   }
 };
 
@@ -203,7 +216,8 @@ function clientConfig(key) {
   // Shared unless a client explicitly overrides them.
   return Object.assign({
     examples: SHARED_EXAMPLES,
-    closing: SHARED_CLOSING
+    closing: SHARED_CLOSING,
+    replacementInstruction: REPLACEMENT_INSTRUCTIONS.amazon
   }, config);
 }
 
@@ -211,6 +225,7 @@ module.exports = {
   CLIENTS,
   SHARED_EXAMPLES,
   SHARED_CLOSING,
+  REPLACEMENT_INSTRUCTIONS,
   AMAZON_STATIONS,
   VOI_CITIES,
   canonicalCity,
