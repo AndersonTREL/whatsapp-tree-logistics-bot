@@ -117,7 +117,7 @@ both; Auto Team is his primary for grouping.
 npm --prefix console test
 ```
 
-72 checks, all against an in-memory sheet — nothing touches the production
+76 checks, all against an in-memory sheet — nothing touches the production
 spreadsheet. They cover the day-first timestamp parsing, the filters, duplicate
 detection, the dashboard maths, the access gate, and every safety rule above.
 
