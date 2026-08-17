@@ -29,6 +29,23 @@ const AMAZON_STATIONS = ['DBE2', 'DBE3'];
  */
 const VOI_CITIES = ['Berlin', 'Hamburg', 'Kiel', 'Flensburg', 'Rostock', 'Schwerin'];
 
+/**
+ * The examples offered when asking a driver what they need.
+ *
+ * Shared by both contracts on purpose. Three of the four are payroll, documents
+ * and vacation, which apply to anyone on the payroll regardless of who they
+ * drive for. A client can override `examples` and `closing` below if the two ever
+ * need to diverge; today neither does.
+ */
+const SHARED_EXAMPLES = [
+  'I need login details for Emietarbeiter',
+  'I need Lohnabrechnung for this month',
+  'My scanner has some issues with GPS',
+  'Can I request vacation from X date to X date?'
+];
+
+const SHARED_CLOSING = 'Everything that is not an on-the-road issue, you can request here.';
+
 const CLIENTS = {
   amazon: {
     key: 'amazon',
@@ -36,29 +53,14 @@ const CLIENTS = {
     /** What to call the location when asking for it. */
     locationNoun: 'station',
     /** Shown when the bot asks who the driver is. */
-    locationHint: 'DBE2 or DBE3',
-    /** Examples offered when asking what they need. */
-    examples: [
-      'I need login details for Emietarbeiter',
-      'I need Lohnabrechnung for this month',
-      'My scanner has some issues with GPS',
-      'Can I request vacation from X date to X date?'
-    ],
-    closing: 'Everything that is not an on-the-road issue, you can request here.'
+    locationHint: 'DBE2 or DBE3'
   },
 
   voi: {
     key: 'voi',
     label: 'VOI',
     locationNoun: 'city',
-    locationHint: VOI_CITIES.slice(0, 3).join(', ') + '…',
-    examples: [
-      'I need my Lohnabrechnung for this month',
-      'I want to change my IBAN',
-      'Can I request vacation from X date to X date?',
-      'I need new work clothes in size L'
-    ],
-    closing: 'Everything that is not an on-the-street issue, you can request here.'
+    locationHint: VOI_CITIES.slice(0, 3).join(', ') + '…'
   }
 };
 
@@ -196,11 +198,19 @@ function clientOfStation(station) {
 }
 
 function clientConfig(key) {
-  return CLIENTS[key] || CLIENTS.amazon;
+  const config = CLIENTS[key] || CLIENTS.amazon;
+
+  // Shared unless a client explicitly overrides them.
+  return Object.assign({
+    examples: SHARED_EXAMPLES,
+    closing: SHARED_CLOSING
+  }, config);
 }
 
 module.exports = {
   CLIENTS,
+  SHARED_EXAMPLES,
+  SHARED_CLOSING,
   AMAZON_STATIONS,
   VOI_CITIES,
   canonicalCity,

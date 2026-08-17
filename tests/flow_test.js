@@ -381,12 +381,21 @@ async function main() {
     await send(pV, 'Hi');
     const voi = await send(pV, 'Mehmet Acar VOI Berlin');
 
-    check('S17 Amazon drivers see the scanner example',
-      /scanner/i.test(amazon.text), amazon.text.slice(0, 200));
-    check('S17 VOI drivers do not see the scanner example',
-      !/scanner/i.test(voi.text), voi.text.slice(0, 200));
-    check('S17 VOI drivers still see the shared payroll example',
-      /Lohnabrechnung/i.test(voi.text), voi.text.slice(0, 200));
+    // Both contracts share one question pack: the topics are payroll, documents
+    // and vacation, which apply to anyone on the payroll either way.
+    const exampleBlock = (text) => (text.match(/Examples:[\s\S]*?\n\n/) || [''])[0];
+
+    check('S17 both contracts are offered the same examples',
+      exampleBlock(amazon.text) === exampleBlock(voi.text),
+      'amazon=' + JSON.stringify(exampleBlock(amazon.text)) +
+      ' voi=' + JSON.stringify(exampleBlock(voi.text)));
+    check('S17 the examples are actually present',
+      /Lohnabrechnung/i.test(voi.text) && /scanner/i.test(voi.text) &&
+      /Emietarbeiter/i.test(voi.text) && /vacation/i.test(voi.text),
+      voi.text.slice(0, 300));
+    check('S17 each still greets with its own location',
+      /DBE3/.test(amazon.text) && /VOI Berlin/.test(voi.text),
+      'amazon=' + amazon.text.slice(0, 60) + ' voi=' + voi.text.slice(0, 60));
   }
 
   // === Scenario 18: a VOI driver who leads with their request ===
