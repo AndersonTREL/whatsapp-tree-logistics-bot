@@ -5,11 +5,17 @@
  * workload by owner, volume by station, ageing of open requests) and stamps a
  * "Completed At" date whenever someone marks a request Completed.
  *
+ * The dashboard keeps itself current as requests arrive - see "KEEPING THE
+ * DASHBOARD CURRENT" below - and fully rebuilds twice a day as a backstop.
+ *
  * SETUP:
  *   1. Google Sheet -> Extensions -> Apps Script
  *   2. File -> New -> Script, name it "dashboard", paste this whole file
  *   3. Save, then run "setupDashboard" once and authorise when prompted
  *   4. Reload the spreadsheet - a "TREL" menu appears in the toolbar
+ *
+ * ALREADY SET UP BEFORE INSTANT REFRESH EXISTED? Paste this file over the old
+ * one and run "setupInstantDashboardRefresh" once. Everything else is untouched.
  *
  * NOTE ON NAMING: Apps Script shares one global scope across every file in a
  * project. daily_email_report.gs already declares SHEET_NAME, OPEN_STATUSES and
@@ -69,6 +75,7 @@ function onOpen() {
     .addSeparator()
     .addItem('📧 Send open requests report now', 'sendDailyOpenRequestsReport')
     .addItem('🔍 Check completion tracking', 'dashCompletionTrackingStatus')
+    .addItem('⚡ Check dashboard refresh status', 'dashRefreshStatus')
     .addToUi();
 }
 
@@ -84,12 +91,164 @@ function setupDashboard() {
     ScriptApp.newTrigger('buildDashboard').timeBased().atHour(hour).everyDays(1).create();
   });
 
+  // Also keep the dashboard current between those hours.
+  setupInstantDashboardRefresh();
+
   SpreadsheetApp.getActiveSpreadsheet().toast(
-    'Dashboard created. It refreshes at ' + DASH_REFRESH_HOURS.map(function (h) {
+    'Dashboard created. It now updates as requests arrive, and fully rebuilds at ' +
+    DASH_REFRESH_HOURS.map(function (h) {
       return (h < 10 ? '0' : '') + h + ':00';
-    }).join(' and ') + ', or use TREL -> Refresh dashboard.',
+    }).join(' and ') + '.',
     'Setup complete', 10
   );
+}
+
+// ==================== KEEPING THE DASHBOARD CURRENT ====================
+
+/**
+ * The dashboard used to rebuild only at 07:00 and 15:00, so a request that came
+ * in at 15:30 was invisible to anyone working from the Dashboard tab until the
+ * next morning. These two triggers close that gap.
+ *
+ * Two mechanisms on purpose:
+ *
+ *   dashOnSourceChange  - installable onChange trigger, fires within seconds.
+ *                         Unlike the simple onEdit above, an installable
+ *                         onChange is reported to fire for Sheets API writes
+ *                         (which is how the bot adds rows), but that behaviour
+ *                         is not guaranteed by the documentation.
+ *   dashWatchdog        - every 5 minutes, as the guarantee. If onChange never
+ *                         fires for API appends, nothing is ever more than 5
+ *                         minutes stale.
+ *
+ * Both funnel into dashRefreshIfChanged, which rebuilds only when the source
+ * data actually changed, so the redundancy costs almost nothing when idle.
+ */
+
+const DASH_WATCHDOG_MINUTES = 5;
+const DASH_FINGERPRINT_KEY = 'dashSourceFingerprint';
+const DASH_LAST_REFRESH_KEY = 'dashLastRefresh';
+
+/**
+ * A cheap signature of the source sheet: how many rows it has, plus the state of
+ * the Status column. New requests change the row count; the office marking
+ * something Completed changes a status. Either one means the dashboard is out of
+ * date. Hashed because Script Properties cap a value at 9KB.
+ *
+ * Deliberately ignores the Dashboard tab, so the rebuild cannot retrigger itself.
+ */
+function dashSourceFingerprint(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 'empty';
+
+  const statuses = sheet
+    .getRange(2, DASH_COL_STATUS, lastRow - 1, 1)
+    .getValues()
+    .map(function (r) { return String(r[0] || '').trim(); })
+    .join('');
+
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.MD5, lastRow + '|' + statuses, Utilities.Charset.UTF_8
+  );
+
+  return lastRow + ':' + Utilities.base64Encode(digest);
+}
+
+/** Rebuilds the dashboard only if the source data moved since the last rebuild. */
+function dashRefreshIfChanged(reason) {
+  const lock = LockService.getScriptLock();
+
+  // Another refresh is already running - it will pick up this change too.
+  if (!lock.tryLock(5000)) return false;
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const fingerprint = dashSourceFingerprint(dashGetSourceSheet());
+
+    if (props.getProperty(DASH_FINGERPRINT_KEY) === fingerprint) return false;
+
+    buildDashboard();
+    props.setProperty(DASH_FINGERPRINT_KEY, fingerprint);
+    props.setProperty(DASH_LAST_REFRESH_KEY, new Date().toISOString() + ' (' + reason + ')');
+    console.log('Dashboard refreshed - ' + reason);
+    return true;
+  } catch (err) {
+    // Never throw from a trigger: a failure here must not stop the next one.
+    console.error('Dashboard refresh failed (' + reason + '): ' + err.message);
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Installable onChange handler. Every change type is let through rather than
+ * filtered, because the fingerprint check is the real guard and is cheaper than
+ * being wrong about which type an API append reports.
+ */
+function dashOnSourceChange(e) {
+  dashRefreshIfChanged('onChange:' + ((e && e.changeType) || 'UNKNOWN'));
+}
+
+/** Five-minute safety net in case onChange does not fire for API writes. */
+function dashWatchdog() {
+  dashRefreshIfChanged('watchdog');
+}
+
+/**
+ * Installs both triggers. Safe to re-run - it clears its own triggers first.
+ * Run this once if the dashboard was set up before instant refresh existed.
+ */
+function setupInstantDashboardRefresh() {
+  const handlers = ['dashOnSourceChange', 'dashWatchdog'];
+
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (handlers.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
+  });
+
+  ScriptApp.newTrigger('dashOnSourceChange')
+    .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+    .onChange()
+    .create();
+
+  ScriptApp.newTrigger('dashWatchdog')
+    .timeBased()
+    .everyMinutes(DASH_WATCHDOG_MINUTES)
+    .create();
+
+  // Force the next check to rebuild, so the dashboard is correct straight away.
+  PropertiesService.getScriptProperties().deleteProperty(DASH_FINGERPRINT_KEY);
+
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    'Instant refresh is on. New requests appear within seconds, and never more ' +
+    'than ' + DASH_WATCHDOG_MINUTES + ' minutes late.',
+    'Triggers installed', 10
+  );
+}
+
+/** Shows whether the triggers are installed and when the dashboard last rebuilt. */
+function dashRefreshStatus() {
+  const props = PropertiesService.getScriptProperties();
+  const installed = {};
+
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    installed[t.getHandlerFunction()] = true;
+  });
+
+  const lines = [
+    'Instant (onChange): ' + (installed['dashOnSourceChange'] ? 'installed ✅' : 'MISSING ❌'),
+    'Watchdog (' + DASH_WATCHDOG_MINUTES + ' min): ' + (installed['dashWatchdog'] ? 'installed ✅' : 'MISSING ❌'),
+    'Daily rebuilds: ' + (installed['buildDashboard'] ? 'installed ✅' : 'MISSING ❌'),
+    '',
+    'Last rebuild: ' + (props.getProperty(DASH_LAST_REFRESH_KEY) || 'not recorded yet')
+  ];
+
+  if (!installed['dashOnSourceChange'] || !installed['dashWatchdog']) {
+    lines.push('', 'Run setupInstantDashboardRefresh to install the missing ones.');
+  }
+
+  SpreadsheetApp.getUi().alert('Dashboard refresh status', lines.join('\n'),
+    SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 // ==================== COMPLETION DATE TRACKING ====================
