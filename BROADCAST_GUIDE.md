@@ -8,6 +8,25 @@ The broadcast messaging feature allows you to send WhatsApp messages to all user
 - Maintenance notifications
 - General communications
 
+## Authentication
+
+These endpoints can message every driver and list every phone number, and they sit
+on a public URL, so they require a shared secret. Send it as an `x-admin-secret`
+header on every call below.
+
+The value lives in Railway -> service `whatsapp-tree-logistics-bot` -> Variables ->
+`ADMIN_SECRET`. Without the header the endpoints return:
+
+```json
+{ "success": false, "error": "Forbidden" }
+```
+
+The driver-facing webhook is NOT affected — drivers keep messaging the bot exactly
+as before. Only these admin endpoints changed.
+
+The same secret also guards `/normalize-statuses`, `/fix-completed-statuses`,
+`/force-fix-all-statuses`, `/format-sheet` and `/clear-flows`.
+
 ## How to Use
 
 ### 1. Check Recipients (Optional)
@@ -15,7 +34,8 @@ The broadcast messaging feature allows you to send WhatsApp messages to all user
 Before sending, you can check how many people will receive the message:
 
 ```bash
-curl http://localhost:3000/broadcast/recipients
+curl http://localhost:3000/broadcast/recipients \
+  -H "x-admin-secret: $ADMIN_SECRET"
 ```
 
 **Response:**
@@ -38,6 +58,7 @@ Send a message to all recipients:
 ```bash
 curl -X POST http://localhost:3000/broadcast \
   -H "Content-Type: application/json" \
+  -H "x-admin-secret: $ADMIN_SECRET" \
   -d '{
     "message": "🌳 Important Update: Our support system will be under maintenance tonight from 10 PM to 2 AM. Thank you for your understanding!"
   }'
@@ -61,6 +82,7 @@ curl -X POST http://localhost:3000/broadcast \
 2. **URL:** `http://localhost:3000/broadcast` (or your production URL)
 3. **Headers:**
    - `Content-Type: application/json`
+   - `x-admin-secret: <ADMIN_SECRET from Railway>`
 4. **Body (JSON):**
    ```json
    {
@@ -139,6 +161,7 @@ For production, use your Railway deployment URL:
 ```bash
 curl -X POST https://whatsapp-tree-logistics-bot-production.up.railway.app/broadcast \
   -H "Content-Type: application/json" \
+  -H "x-admin-secret: $ADMIN_SECRET" \
   -d '{
     "message": "Your message here"
   }'
@@ -146,21 +169,25 @@ curl -X POST https://whatsapp-tree-logistics-bot-production.up.railway.app/broad
 
 ## Security Considerations
 
-⚠️ **Important:** The broadcast endpoint is currently open. Consider adding:
+✅ **Authentication is in place.** `ADMIN_SECRET` is set on the Railway service and
+every admin endpoint compares it in constant time, so a wrong value cannot be
+guessed by timing. Requests without the header get a 403 and are logged.
 
-1. **Authentication** - Require API key or token
-2. **Authorization** - Only allow specific users/IPs
-3. **Rate Limiting** - Prevent abuse
-4. **Webhook Verification** - Verify requests are legitimate
+This guide previously noted the endpoint was open — it no longer is.
 
-Example with basic auth (to be implemented):
+Still worth knowing:
 
-```javascript
-// Add middleware to protect the endpoint
-app.post('/broadcast', authenticateAdmin, async (req, res) => {
-  // ... existing code
-});
-```
+1. **Rate limiting** — there is none. A valid secret can trigger an unlimited
+   number of broadcasts, and each one messages every driver in the sheet.
+2. **No dry run** — `/broadcast` sends immediately. Check
+   `/broadcast/recipients` first to see who would receive it.
+3. **Rotating the secret** — change `ADMIN_SECRET` in Railway. The service restarts
+   and the old value stops working at once.
+4. **Removing the gate** — deleting `ADMIN_SECRET` returns these endpoints to being
+   public. That is deliberate, so the choice is explicit rather than accidental.
+
+The driver-facing webhook is separate and unaffected: it is verified by Twilio's
+own request signature (see `TWILIO_VALIDATE_SIGNATURE` in the main README).
 
 ## Example Messages
 
