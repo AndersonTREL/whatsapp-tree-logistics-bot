@@ -235,6 +235,11 @@ async function call(pathname, opts) {
   check('health reports the gate is on', health.status === 200 && health.body.gated === true,
     JSON.stringify(health.body));
 
+  check('the refresh interval defaults to five minutes',
+    health.body.pollSeconds === 300, 'pollSeconds=' + health.body.pollSeconds);
+  check('the client is told the interval so it can be tuned without a deploy',
+    whoAnon.body.pollSeconds === 300, 'pollSeconds=' + whoAnon.body.pollSeconds);
+
   listener.close();
 
   const failed = results.filter((r) => !r.pass);

@@ -38,6 +38,7 @@
     onlyNew: false,        // the "N new" chip filters down to just those
     baselineReady: false,  // first load establishes what was already there
     lastTotal: null,       // drives the cheap pulse check
+    pollMs: 300000,        // how often to check for new requests; server-configurable
     error: null,
     gateError: null,
     saving: false,
@@ -676,6 +677,35 @@
 
   // ---------------------------------------------------------------- render
 
+  /**
+   * Re-rendering replaces the whole tree, which loses where the user had scrolled
+   * to. Anyone working down a long queue was being sent back to the top on every
+   * background tick.
+   */
+  function withScrollPreserved(paint) {
+    var queue = root.querySelector('.queue-list');
+    var detail = root.querySelector('.detail');
+    var queueTop = queue ? queue.scrollTop : null;
+    var detailTop = detail ? detail.scrollTop : null;
+
+    paint();
+
+    if (queueTop) {
+      var newQueue = root.querySelector('.queue-list');
+      if (newQueue) newQueue.scrollTop = queueTop;
+    }
+    if (detailTop) {
+      var newDetail = root.querySelector('.detail');
+      if (newDetail) newDetail.scrollTop = detailTop;
+    }
+  }
+
+  /** Updates just the "synced HH:MM" label, without disturbing the page. */
+  function updateSyncedLabel() {
+    var el = root.querySelector('.synced');
+    if (el) el.textContent = 'synced ' + shortTime(state.syncedAt);
+  }
+
   function render() {
     if (!state.ready) {
       root.innerHTML = '<div class="detail-empty">Loading…</div>';
@@ -712,7 +742,9 @@
         queuePane() + detailPane() + '</div>';
     }
 
-    root.innerHTML = topBar() + body;
+    withScrollPreserved(function () {
+      root.innerHTML = topBar() + body;
+    });
     wire();
   }
 
@@ -978,6 +1010,10 @@
         state.actor = who.actor;
         state.publicDashboard = who.publicDashboard;
         state.ownerGroups = who.owners;
+        if (who.pollSeconds) {
+          state.pollMs = who.pollSeconds * 1000;
+          startPolling();
+        }
         state.ready = true;
 
         if (!who.authed) {
@@ -1007,12 +1043,15 @@
   /**
    * Keeps the queue current without a manual reload.
    *
-   * Polls the cheap /api/pulse probe and only pulls the full request list when
-   * the totals actually move, so a new request is noticed within ~20 seconds
-   * without shipping the whole sheet every time. The badge therefore keeps
-   * counting even while someone is sitting on the Dashboard tab.
+   * Checks the cheap /api/pulse probe and only pulls the full request list when
+   * the totals actually move, so most ticks cost almost nothing. Crucially it
+   * only repaints when something really changed — repainting on every tick threw
+   * away the user's scroll position and made the page feel restless.
+   *
+   * Interval comes from the server (CONSOLE_POLL_SECONDS) so it can be tuned
+   * without a deploy. Your own edits never wait for this; they apply instantly.
    */
-  setInterval(function () {
+  function pollOnce() {
     if (!state.authed || state.saving) return;
 
     api('/api/pulse')
@@ -1022,22 +1061,38 @@
         var changed = state.lastTotal == null || pulse.total !== state.lastTotal;
 
         if (state.view === 'dashboard') {
-          // Keep the badge alive from any view, then refresh what is on screen.
-          if (changed) {
-            return refresh().then(loadDashboard);
-          }
+          if (changed) return refresh().then(loadDashboard);
           return loadDashboard();
         }
 
         // Never redraw the queue out from under someone mid-sentence.
-        if (document.activeElement && document.activeElement.id === 'draft') return;
+        if (document.activeElement && document.activeElement.id === 'draft') {
+          updateSyncedLabel();
+          return;
+        }
 
         if (changed) return refresh().then(render);
-        render();
+
+        // Nothing moved: show that we checked, and leave the page alone.
+        updateSyncedLabel();
       })
       .catch(function (err) {
         if (err.status === 401) { state.authed = false; render(); }
         // A transient blip is not worth a banner; the next tick retries.
       });
-  }, 20000);
+  }
+
+  var pollTimer = null;
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollOnce, state.pollMs);
+  }
+
+  startPolling();
+
+  // Coming back to a tab that has been idle should not mean waiting out the rest
+  // of the interval to see what arrived.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) pollOnce();
+  });
 })();

@@ -9,6 +9,9 @@
  */
 
 process.env.CONSOLE_ACCESS_CODE = process.env.CONSOLE_ACCESS_CODE || 'demo';
+// The demo polls every 15s rather than production's 300s, so a simulated arrival
+// can actually be watched turning up.
+process.env.CONSOLE_POLL_SECONDS = process.env.CONSOLE_POLL_SECONDS || '15';
 process.env.PORT = process.env.PORT || '4100';
 process.env.GOOGLE_SHEET_ID = 'DEMO-SHEET';
 

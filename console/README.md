@@ -35,6 +35,7 @@ CONSOLE_ACCESS_CODE=... GOOGLE_SHEET_ID=... GOOGLE_APPLICATION_CREDENTIALS_JSON=
 | `GOOGLE_SHEET_ID` | yes | Same spreadsheet the bot writes to. |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | yes | Same service-account JSON the bot uses. |
 | `CONSOLE_PUBLIC_DASHBOARD` | no (`true`) | Dashboard readable without the code. Aggregates only — no names, phones or request text. |
+| `CONSOLE_POLL_SECONDS` | no (`300`) | How often an open tab checks for new requests. Minimum 15. Your own edits are always instant. |
 | `CONSOLE_OPEN` | no (`false`) | `true` removes the access gate entirely. See the warning below. |
 | `CONSOLE_SHEET_NAME` | no (`Driver Requests`) | Source tab. |
 | `CONSOLE_ACTIVITY_SHEET` | no (`Activity Log`) | Append-only log tab, created on first use. |
@@ -68,8 +69,15 @@ The bot service was left untouched.
 
 ## Noticing new requests
 
-A request the bot writes shows up in an open Inbox on its own, within about 20
-seconds, with no refresh. Three things make it hard to miss:
+A request the bot writes shows up in an open Inbox on its own, with no refresh.
+How quickly is set by `CONSOLE_POLL_SECONDS` (default **300**, i.e. five minutes)
+— and coming back to a tab that was in the background refreshes it straight away,
+so you never wait out the remainder of an interval.
+
+Your own edits never wait for this. They apply instantly; the interval only
+governs how fast *someone else's* changes and new arrivals reach you.
+
+Three things make an arrival hard to miss:
 
 - **"N new since you opened"** above the queue. Clicking it shows just those.
 - **A `NEW` tag** on each row until someone opens it.
@@ -87,9 +95,15 @@ console does not announce 68 new requests. Counts are per browser tab and reset
 when it is reloaded.
 
 Polling uses `GET /api/pulse`, which returns only totals. The full request list is
-fetched only when those totals move, so watching the queue does not mean shipping
-the whole sheet every 20 seconds. The poll also pauses while someone is typing in
-the action composer, so it cannot wipe a half-written note.
+fetched only when those totals move, so most ticks cost almost nothing. A tick
+that finds no change repaints nothing at all — it only updates the "synced" clock,
+because repainting was throwing away wherever the user had scrolled to. The poll
+also pauses while someone is typing in the action composer, so it cannot wipe a
+half-written note.
+
+To make arrivals appear faster, lower `CONSOLE_POLL_SECONDS` in Railway; no deploy
+is needed, and the floor is 15 seconds. The demo server uses 15 so a simulated
+arrival can actually be watched turning up.
 
 ## What it writes, and what it will not
 
@@ -142,7 +156,7 @@ both; Auto Team is his primary for grouping.
 npm --prefix console test
 ```
 
-81 checks, all against an in-memory sheet — nothing touches the production
+89 checks, all against an in-memory sheet — nothing touches the production
 spreadsheet. They cover the day-first timestamp parsing, the filters, duplicate
 detection, the dashboard maths, the access gate, and every safety rule above.
 

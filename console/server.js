@@ -32,6 +32,11 @@ const PORT = process.env.PORT || 4000;
 const ACCESS_CODE = process.env.CONSOLE_ACCESS_CODE || '';
 const OPEN_MODE = process.env.CONSOLE_OPEN === 'true';
 const PUBLIC_DASHBOARD = process.env.CONSOLE_PUBLIC_DASHBOARD !== 'false';
+
+// How often an open tab checks for new requests. Served to the client so it can
+// be tuned in Railway without a deploy. Your own edits never wait for this —
+// they apply immediately; this is only how fast someone else's arrive.
+const POLL_SECONDS = Math.max(15, parseInt(process.env.CONSOLE_POLL_SECONDS || '300', 10) || 300);
 const SESSION_COOKIE = 'trel_console';
 const ACTOR_COOKIE = 'trel_actor';
 
@@ -260,6 +265,7 @@ app.get('/health', function (req, res) {
     version: VERSION,
     gated: !OPEN_MODE,
     publicDashboard: PUBLIC_DASHBOARD,
+    pollSeconds: POLL_SECONDS,
     timestamp: new Date().toISOString()
   });
 });
@@ -269,6 +275,7 @@ app.get('/api/whoami', function (req, res) {
     authed: isAuthed(req),
     actor: currentActor(req),
     publicDashboard: PUBLIC_DASHBOARD,
+    pollSeconds: POLL_SECONDS,
     owners: owners.assignableOwners()
   });
 });
@@ -289,6 +296,7 @@ if (require.main === module) {
     console.log('   Credentials:      ' + (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ? '✅ set' : '❌ GOOGLE_APPLICATION_CREDENTIALS_JSON missing'));
     console.log('   Access gate:      ' + (OPEN_MODE ? '⚠️  OPEN — no code required' : '✅ shared code'));
     console.log('   Public dashboard: ' + (PUBLIC_DASHBOARD ? 'yes (aggregates only)' : 'no'));
+    console.log('   Refresh interval: every ' + POLL_SECONDS + 's (CONSOLE_POLL_SECONDS)');
     console.log('   Roster:           ' + owners.assignableNames().length + ' people across ' + owners.TEAMS.length + ' teams');
     console.log('='.repeat(60));
   });
