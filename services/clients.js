@@ -165,7 +165,7 @@ function detectClient(words) {
   }
 
   const voiIndex = words.findIndex(isVoiToken);
-  if (voiIndex === -1) return null;
+  if (voiIndex === -1) return detectCityOnly(words);
 
   // The city is usually right after VOI, but drivers also write "Berlin VOI".
   const candidates = [voiIndex + 1, voiIndex - 1];
@@ -202,6 +202,35 @@ function detectClient(words) {
   };
 }
 
+/**
+ * A VOI driver who named their city without writing "VOI".
+ *
+ * This is the normal case: drivers are asked where they work, not which contract
+ * they are on, so a VOI driver answers "Marta Kowalska Berlin". Only an exact
+ * match against a city we run counts here — fuzzy matching is reserved for when
+ * the driver wrote VOI explicitly, because without that word a near-miss is far
+ * more likely to be somebody's surname than a typo.
+ */
+function detectCityOnly(words) {
+  for (let i = 0; i < words.length; i++) {
+    const bare = words[i].replace(/[.,;:]$/, '');
+    const city = VOI_CITIES.find(function (c) { return c.toLowerCase() === bare.toLowerCase(); });
+    if (!city) continue;
+
+    // "Berlin" on its own is not a driver identifying themselves.
+    if (words.length - 1 < 1) continue;
+
+    return {
+      client: 'voi',
+      location: city,
+      station: 'VOI ' + city,
+      usedIndexes: [i],
+      needsCity: false
+    };
+  }
+  return null;
+}
+
 /** The client a station cell belongs to, for reading rows back. */
 function clientOfStation(station) {
   const value = String(station || '').trim().toUpperCase();
@@ -230,6 +259,7 @@ module.exports = {
   VOI_CITIES,
   canonicalCity,
   detectClient,
+  detectCityOnly,
   clientOfStation,
   clientConfig,
   titleCase,

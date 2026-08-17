@@ -146,16 +146,14 @@ We have your message and it is safe — we just need to know who you are before 
 
 Please reply with your first name, last name, and where you work.
 
-🏢 Amazon: DBE2 or DBE3
-🛴 VOI: VOI and your city, for example "VOI Berlin"`;
+For example: John Smith DBE2   or   Maria Garcia Berlin`;
   }
 
   return `🌳 Welcome to Tree Logistics Office Support!
 
 We are glad that you reached out! To get started, please tell us your first name, last name, and where you work.
 
-🏢 Amazon: DBE2 or DBE3
-🛴 VOI: VOI and your city, for example "VOI Berlin"`;
+📝 For example: John Smith DBE2   or   Maria Garcia Berlin`;
 }
 
 // Handle data collection - parse the single message for all 3 pieces of info
@@ -186,16 +184,13 @@ For example: ${clients.VOI_CITIES.slice(0, 4).join(', ')}`;
         return `📝 Thanks! We also need your last name.
 
 Please send your first name, last name and where you work together, for example:
-John Smith DBE2   —   or   —   John Smith VOI Berlin`;
+John Smith DBE2   —   or   —   Maria Garcia Berlin`;
       }
 
       return `📝 We still need to know where you work, so your request reaches the right team.
 
-Please send it together with your name, for example:
-John Smith DBE2   —   or   —   John Smith VOI Berlin
-
-🏢 Amazon: DBE2 or DBE3
-🛴 VOI: VOI and your city`;
+Please send it together with your name — your station or your city:
+John Smith DBE2   —   or   —   Maria Garcia Berlin`;
     }
 
     // Now ask for their request/question

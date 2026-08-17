@@ -451,6 +451,87 @@ async function main() {
       JSON.stringify({ a: rowA && rowA.station, v: rowV && rowV.station }));
   }
 
+  // === Scenario 20: VOI drivers give their city, never the word "VOI" ===
+  {
+    for (const [label, msg, expect] of [
+      ['city only',        'Marta Kowalska Berlin',  { station: 'VOI Berlin',  first: 'Marta',  last: 'Kowalska' }],
+      ['lowercase city',   'jonas lindqvist hamburg', { station: 'VOI Hamburg', first: 'jonas',  last: 'lindqvist' }],
+      ['city first',       'Kiel Tomasz Nowak',      { station: 'VOI Kiel',    first: 'Tomasz', last: 'Nowak' }],
+      ['three-part name',  'Aisha Marie Diallo Rostock', { station: 'VOI Rostock', first: 'Aisha', last: 'Marie Diallo' }],
+    ]) {
+      const p = nextPhone();
+      await send(p, 'Hi');
+      const r = await send(p, msg);
+      if (!REPLY.askRequest.test(r.text)) {
+        check(`S20 ${label} accepted`, false, r.text);
+        continue;
+      }
+      await send(p, 'I need my Lohnabrechnung for this month please');
+      const row = saved.find((s) => s.phoneNumber === p);
+      check(`S20 ${label} -> ${expect.station}`,
+        row && row.station === expect.station && row.firstName === expect.first && row.lastName === expect.last,
+        row ? JSON.stringify({ s: row.station, f: row.firstName, l: row.lastName }) : 'not saved');
+    }
+  }
+
+  // === Scenario 21: nobody is asked to choose between Amazon and VOI ===
+  {
+    const p = nextPhone();
+    const welcome = await send(p, 'Hi');
+    check('S21 the welcome does not brand a choice between the two',
+      !/Amazon:/i.test(welcome.text) && !/VOI:/i.test(welcome.text) && !/🛴/.test(welcome.text),
+      welcome.text);
+    check('S21 the welcome still shows both shapes of answer',
+      /DBE2/.test(welcome.text) && /Berlin/.test(welcome.text), welcome.text);
+
+    const reprompt = await send(p, 'just my name');
+    check('S21 the re-prompt does not brand a choice either',
+      !/Amazon:/i.test(reprompt.text) && !/VOI:/i.test(reprompt.text), reprompt.text);
+  }
+
+  // === Scenario 22: writing "VOI Berlin" still works for anyone used to it ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hi');
+    const r = await send(p, 'Sofia Ruiz VOI Schwerin');
+    check('S22 the explicit "VOI <city>" form still works', REPLY.askRequest.test(r.text), r.text);
+    await send(p, 'I need a confirmation letter for my landlord');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S22 stored the same way either form is used',
+      row && row.station === 'VOI Schwerin', row ? row.station : 'not saved');
+  }
+
+  // === Scenario 23: a city typo without "VOI" is not guessed at ===
+  {
+    // Fuzzy matching only applies when VOI is written explicitly — otherwise a
+    // near-miss is more likely to be a surname than a typo.
+    const p = nextPhone();
+    await send(p, 'Hi');
+    const r = await send(p, 'Lena Bergmann Berlim');
+    check('S23 a misspelled city with no VOI is re-asked, not assumed',
+      REPLY.askAgain.test(r.text) && !REPLY.askRequest.test(r.text), r.text);
+
+    const p2 = nextPhone();
+    await send(p2, 'Hi');
+    const r2 = await send(p2, 'Lena Bergmann VOI Berlim');
+    check('S23 the same typo with VOI written is corrected', REPLY.askRequest.test(r2.text), r2.text);
+    await send(p2, 'I need my payslip for last month please');
+    const row = saved.find((s) => s.phoneNumber === p2);
+    check('S23 corrected to VOI Berlin', row && row.station === 'VOI Berlin',
+      row ? row.station : 'not saved');
+  }
+
+  // === Scenario 24: Amazon wins when both appear ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hi');
+    await send(p, 'Ahmed Hassan DBE3 Berlin');
+    await send(p, 'I need login details for the portal please');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S24 a station beats a city name in the same message',
+      row && row.station === 'DBE3', row ? row.station : 'not saved');
+  }
+
   // ---- summary ----
   const failed = results.filter((r) => !r.pass);
   process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed\n`);
