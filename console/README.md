@@ -7,6 +7,11 @@ Runs as its **own service**, separate from the WhatsApp bot. It shares only the
 spreadsheet and the service-account credentials, so a fault here cannot take down
 the driver-facing webhook.
 
+**Live:** <https://driver-requests-console-production.up.railway.app>
+
+The dashboard opens for anyone with that link. The Inbox asks for the shared team
+code (Railway service `driver-requests-console` -> Variables -> `CONSOLE_ACCESS_CODE`).
+
 ## Try it without touching the real sheet
 
 ```bash
@@ -48,17 +53,18 @@ viewer is not authenticated, the "Needs attention" table drops the request text.
 `CONSOLE_OPEN=true` exists so the choice is deliberate rather than accidental.
 With it set, anyone holding the URL can read driver IBANs and change triage state.
 
-## Deploying on Railway
+## How it is deployed
 
-Add a **second service** in the same project as the bot:
+Railway project `thorough-dream`, service **`driver-requests-console`**, alongside
+the bot rather than inside it — a fault here cannot take down the driver webhook.
 
-- Root directory: `console`
-- Start command: `npm start`
-- Variables: the table above. `GOOGLE_SHEET_ID` and
-  `GOOGLE_APPLICATION_CREDENTIALS_JSON` can be copied from the bot service.
+- Root directory `console`, start command `npm start`, healthcheck `/health`
+- `GOOGLE_SHEET_ID` and `GOOGLE_APPLICATION_CREDENTIALS_JSON` are Railway
+  **reference variables** pointing at the bot service, so the credentials live in
+  exactly one place and rotating them there covers both services
+- `GET /health` reports the version and whether the gate and public dashboard are on
 
-Leave the bot service untouched. `GET /health` reports the version and whether
-the gate and public dashboard are on.
+The bot service was left untouched.
 
 ## What it writes, and what it will not
 
