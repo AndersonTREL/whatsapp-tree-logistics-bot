@@ -130,6 +130,34 @@ select, input, textarea { font-family: inherit; }
 .queue-title h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .queue-count { font-size: 12px; color: var(--muted-2); }
 
+/* Sort direction. Oldest-first is the design default (SLA order); newest-first
+   is for spotting arrivals. */
+.sort-btn {
+  margin-left: auto; background: none; border: none; padding: 2px 0;
+  font-size: 11.5px; font-weight: 600; color: var(--green-text);
+}
+.sort-btn:hover { color: var(--green-800); text-decoration: underline; }
+
+/* "N new since you opened" — the one thing in the queue that should catch the eye. */
+.new-chip {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 7px 10px; border-radius: 7px; text-align: left;
+  background: var(--green-tint); border: 1px solid #BFE0C9;
+  font-size: 12px; font-weight: 600; color: var(--green-800);
+}
+.new-chip:hover { border-color: var(--green-600); }
+.new-chip.on { background: var(--green-600); color: #fff; border-color: var(--green-600); }
+.new-dot {
+  width: 7px; height: 7px; border-radius: 999px; background: var(--green-600); flex: none;
+}
+.new-chip.on .new-dot { background: #fff; }
+
+.new-tag {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 5px; border-radius: 4px;
+  background: var(--green-600); color: #fff;
+}
+
 .search {
   height: 34px; border: 1px solid var(--border-input); border-radius: 7px;
   padding: 0 10px; font-size: 13px; background: var(--fill); width: 100%;

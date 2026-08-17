@@ -185,6 +185,33 @@ async function call(pathname, opts) {
     fake.tabs['Driver Requests'][1][6] === 'whatsapp:+4917630672255',
     fake.tabs['Driver Requests'][1][6]);
 
+  // ---- the pulse probe that drives new-arrival detection ----
+  const pulseAnon = await call('/api/pulse');
+  check('the pulse probe needs the code', pulseAnon.status === 401, 'status=' + pulseAnon.status);
+
+  const pulse = await call('/api/pulse', { cookie: fullCookie });
+  check('the pulse probe reports the totals',
+    pulse.status === 200 && pulse.body.total === 2 && pulse.body.openCount === 1,
+    JSON.stringify(pulse.body));
+  check('the pulse probe names the newest request',
+    pulse.body.latestId === 'REQ-2', JSON.stringify(pulse.body));
+
+  // A new request arrives the way the bot delivers one: appended to the sheet.
+  fake.tabs['Driver Requests'].push([
+    '17/08/2026, 11:30:00', 'Nadir', 'Timur', 'DBE2', 'My scanner will not charge',
+    'REQ-3', 'whatsapp:+4917600000003', 'To be contacted', '', '', '', '', '', ''
+  ]);
+  server.repo.invalidate();
+
+  const pulse2 = await call('/api/pulse', { cookie: fullCookie });
+  check('a newly appended request moves the pulse totals',
+    pulse2.body.total === 3 && pulse2.body.latestId === 'REQ-3', JSON.stringify(pulse2.body));
+
+  const state2 = await call('/api/state', { cookie: fullCookie });
+  check('the new request is in the state payload',
+    state2.body.requests.some((r) => r.id === 'REQ-3'),
+    state2.body.requests.map((r) => r.id).join(','));
+
   // ---- anonymous visitors get the dashboard, not the gate ----
   const whoAnon = await call('/api/whoami');
   check('an anonymous visitor is told the dashboard is open to them',

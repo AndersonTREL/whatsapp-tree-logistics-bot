@@ -66,6 +66,31 @@ the bot rather than inside it — a fault here cannot take down the driver webho
 
 The bot service was left untouched.
 
+## Noticing new requests
+
+A request the bot writes shows up in an open Inbox on its own, within about 20
+seconds, with no refresh. Three things make it hard to miss:
+
+- **"N new since you opened"** above the queue. Clicking it shows just those.
+- **A `NEW` tag** on each row until someone opens it.
+- **The browser tab title** carries the count — `(3) Driver Requests …` — so it is
+  visible while the console sits in a background tab.
+
+The queue still sorts **oldest first** by default, because that is triage order
+and what the handoff specifies. A brand-new request is 0 days old and would
+otherwise sort to the very bottom, which is exactly why the chip and the tag
+exist. There is a **Newest first / Oldest first** toggle beside the queue count,
+and opening the "N new" chip switches to newest-first for you.
+
+The first load never claims arrivals — it establishes the baseline, so opening the
+console does not announce 68 new requests. Counts are per browser tab and reset
+when it is reloaded.
+
+Polling uses `GET /api/pulse`, which returns only totals. The full request list is
+fetched only when those totals move, so watching the queue does not mean shipping
+the whole sheet every 20 seconds. The poll also pauses while someone is typing in
+the action composer, so it cannot wipe a half-written note.
+
 ## What it writes, and what it will not
 
 The client's hard constraint is that no existing data is deleted or adjusted, so
@@ -117,7 +142,7 @@ both; Auto Team is his primary for grouping.
 npm --prefix console test
 ```
 
-76 checks, all against an in-memory sheet — nothing touches the production
+81 checks, all against an in-memory sheet — nothing touches the production
 spreadsheet. They cover the day-first timestamp parsing, the filters, duplicate
 detection, the dashboard maths, the access gate, and every safety rule above.
 

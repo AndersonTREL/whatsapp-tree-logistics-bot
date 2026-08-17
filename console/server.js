@@ -183,6 +183,30 @@ app.get('/api/state', requireAuth, async function (req, res) {
   }
 });
 
+/**
+ * Cheap "has anything changed?" probe. The full state payload is every request
+ * in the sheet, so polling that every few seconds just to notice one new arrival
+ * would be wasteful. The client polls this instead and only fetches the full
+ * state when the totals move.
+ */
+app.get('/api/pulse', requireAuth, async function (req, res) {
+  try {
+    const snap = await repo.snapshot();
+    const open = snap.requests.filter(function (r) { return model.isOpen(r.status); });
+
+    res.json({
+      total: snap.requests.length,
+      openCount: open.length,
+      // The bot appends, so the last row is the newest request.
+      latestId: snap.requests.length ? snap.requests[snap.requests.length - 1].id : null,
+      syncedAt: snap.syncedAt
+    });
+  } catch (err) {
+    console.error('❌ /api/pulse failed:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 /** Aggregate numbers only — safe to leave open. */
 app.get('/api/dashboard', async function (req, res) {
   if (!PUBLIC_DASHBOARD && !isAuthed(req)) {

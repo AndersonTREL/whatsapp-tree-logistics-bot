@@ -33,6 +33,11 @@
     query: '',
     draft: '',
     density: 'comfortable',
+    sort: 'oldest',        // 'oldest' = SLA order (design default), 'newest' = arrivals first
+    newIds: {},            // requests that arrived while this tab was open and are still unread
+    onlyNew: false,        // the "N new" chip filters down to just those
+    baselineReady: false,  // first load establishes what was already there
+    lastTotal: null,       // drives the cheap pulse check
     error: null,
     gateError: null,
     saving: false,
@@ -111,12 +116,53 @@
       });
   }
 
+  function newCount() { return Object.keys(state.newIds).length; }
+
+  /**
+   * Works out which requests appeared since the last poll. The first load only
+   * establishes the baseline - everything already in the sheet is not "new", or
+   * opening the console would claim 68 arrivals.
+   */
+  function noteArrivals(previousIds) {
+    var present = {};
+    state.requests.forEach(function (r) { present[r.id] = true; });
+
+    if (!state.baselineReady) {
+      state.baselineReady = true;
+    } else {
+      state.requests.forEach(function (r) {
+        if (!previousIds[r.id]) state.newIds[r.id] = true;
+      });
+    }
+
+    // Drop anything that has since left the sheet, so the count cannot drift.
+    Object.keys(state.newIds).forEach(function (id) {
+      if (!present[id]) delete state.newIds[id];
+    });
+  }
+
+  /** Marks a request read, so the chip and badge stop counting it. */
+  function markRead(id) {
+    if (state.newIds[id]) {
+      delete state.newIds[id];
+      if (newCount() === 0) state.onlyNew = false;
+    }
+  }
+
+  /** Puts the count in the tab title so it is visible when the tab is not focused. */
+  function updateTabTitle() {
+    var base = 'Driver Requests · Tree Logistics';
+    var n = newCount();
+    document.title = n > 0 ? '(' + n + ') ' + base : base;
+  }
+
   // ---------------------------------------------------------------- filtering
 
   function filtered() {
     var q = state.query.trim().toLowerCase();
 
     var rows = state.requests.filter(function (r) {
+      if (state.onlyNew && !state.newIds[r.id]) return false;
       if (state.station !== 'All' && r.station !== state.station) return false;
 
       if (state.statusFilter === 'Open' && !isOpen(r.status)) return false;
@@ -132,11 +178,16 @@
       return true;
     });
 
+    var newestFirst = state.sort === 'newest';
+
     return rows.sort(function (a, b) {
       var aa = a.age == null ? -1 : a.age;
       var bb = b.age == null ? -1 : b.age;
-      if (bb !== aa) return bb - aa;
-      return String(a.id).localeCompare(String(b.id));
+      if (bb !== aa) return newestFirst ? aa - bb : bb - aa;
+      // Request IDs carry the send time, so they break ties in arrival order.
+      return newestFirst
+        ? String(b.id).localeCompare(String(a.id))
+        : String(a.id).localeCompare(String(b.id));
     });
   }
 
@@ -207,6 +258,7 @@
             '<div class="row-line">' +
               '<span class="row-name">' + esc((r.first + ' ' + r.last).trim() || 'Unknown driver') + '</span>' +
               '<span class="station-tag">' + esc(r.station || '—') + '</span>' +
+              (state.newIds[r.id] ? '<span class="new-tag">NEW</span>' : '') +
               '<span class="row-age" style="color:' + ageColor(r.age) + '">' +
                 (r.age == null ? '—' : r.age + 'd open') + '</span>' +
             '</div>' +
@@ -230,7 +282,17 @@
           '<div class="queue-title">' +
             '<h2>Open queue</h2>' +
             '<span class="queue-count">' + rows.length + ' of ' + openTotal + ' open</span>' +
+            '<button class="sort-btn" id="sortBtn" title="Change the order of the queue">' +
+              (state.sort === 'newest' ? 'Newest first' : 'Oldest first') +
+            '</button>' +
           '</div>' +
+          (newCount() > 0
+            ? '<button class="new-chip' + (state.onlyNew ? ' on' : '') + '" id="newChip">' +
+              '<span class="new-dot"></span>' +
+              newCount() + ' new since you opened' +
+              (state.onlyNew ? ' — showing only these' : '') +
+              '</button>'
+            : '') +
           '<input class="search" id="search" placeholder="Search driver, request ID, text…" value="' +
             esc(state.query) + '">' +
           '<div class="segmented">' +
@@ -730,6 +792,20 @@
       };
     }
 
+    var sortBtn = document.getElementById('sortBtn');
+    if (sortBtn) sortBtn.onclick = function () {
+      state.sort = state.sort === 'newest' ? 'oldest' : 'newest';
+      render();
+    };
+
+    var newChip = document.getElementById('newChip');
+    if (newChip) newChip.onclick = function () {
+      state.onlyNew = !state.onlyNew;
+      // Showing the arrivals is most useful newest-first.
+      if (state.onlyNew) state.sort = 'newest';
+      render();
+    };
+
     root.querySelectorAll('[data-station]').forEach(function (el) {
       el.onclick = function () { state.station = el.getAttribute('data-station'); render(); };
     });
@@ -741,6 +817,8 @@
       el.onclick = function () {
         state.selectedId = el.getAttribute('data-id');
         state.draft = ''; // selecting a request clears the note draft
+        markRead(state.selectedId);
+        updateTabTitle();
         render();
       };
     });
@@ -750,6 +828,8 @@
         state.selectedId = el.getAttribute('data-goto');
         state.draft = '';
         state.view = 'inbox';
+        markRead(state.selectedId);
+        updateTabTitle();
         render();
       };
     });
@@ -833,14 +913,21 @@
   }
 
   function refresh(force) {
+    var previousIds = {};
+    state.requests.forEach(function (r) { previousIds[r.id] = true; });
+
     return api('/api/state' + (force ? '?fresh=1' : ''))
       .then(function (data) {
         state.requests = data.requests;
         state.options = data.options;
         state.ownerGroups = data.options.owners;
         state.syncedAt = data.syncedAt;
+        state.lastTotal = data.requests.length;
         if (data.actor) state.actor = data.actor;
         state.error = null;
+
+        noteArrivals(previousIds);
+        updateTabTitle();
       })
       .catch(function (err) {
         if (err.status === 401) { state.authed = false; return; }
@@ -887,11 +974,40 @@
 
   boot();
 
-  // Keep the queue current without a manual reload.
+  /**
+   * Keeps the queue current without a manual reload.
+   *
+   * Polls the cheap /api/pulse probe and only pulls the full request list when
+   * the totals actually move, so a new request is noticed within ~20 seconds
+   * without shipping the whole sheet every time. The badge therefore keeps
+   * counting even while someone is sitting on the Dashboard tab.
+   */
   setInterval(function () {
     if (!state.authed || state.saving) return;
-    if (state.view === 'dashboard') { loadDashboard(); return; }
-    if (document.activeElement && document.activeElement.id === 'draft') return;
-    refresh().then(render);
-  }, 30000);
+
+    api('/api/pulse')
+      .then(function (pulse) {
+        state.syncedAt = pulse.syncedAt;
+
+        var changed = state.lastTotal == null || pulse.total !== state.lastTotal;
+
+        if (state.view === 'dashboard') {
+          // Keep the badge alive from any view, then refresh what is on screen.
+          if (changed) {
+            return refresh().then(loadDashboard);
+          }
+          return loadDashboard();
+        }
+
+        // Never redraw the queue out from under someone mid-sentence.
+        if (document.activeElement && document.activeElement.id === 'draft') return;
+
+        if (changed) return refresh().then(render);
+        render();
+      })
+      .catch(function (err) {
+        if (err.status === 401) { state.authed = false; render(); }
+        // A transient blip is not worth a banner; the next tick retries.
+      });
+  }, 20000);
 })();

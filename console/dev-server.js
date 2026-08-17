@@ -71,6 +71,30 @@ app.repo.sheets = client;
 app.repo.cacheMs = 0;
 app.repo.invalidate();
 
+// Demo-only: pretend a driver just sent a request, so the new-arrival chip,
+// the NEW tag and the tab badge can be seen working. Never reaches production —
+// this route only exists in dev-server.js.
+let demoSeq = 0;
+app.app.post('/demo/new-request', (req, res) => {
+  demoSeq++;
+  const names = [['Nadir', 'Timur', 'DBE2'], ['Diana', 'Ionita', 'DBE3'], ['Adil', 'Sefer', 'DBE2']];
+  const who = names[demoSeq % names.length];
+  const texts = [
+    'My scanner will not charge, I need a replacement before tomorrow',
+    'I need my Lohnabrechnung for this month, it did not arrive',
+    'Can I request vacation from 01.10.2026 to 08.10.2026?'
+  ];
+
+  fake.tabs['Driver Requests'].push([
+    daysAgo(0), who[0], who[1], who[2], texts[demoSeq % texts.length],
+    'REQ-DEMO-' + Date.now(), 'whatsapp:+49176000009' + demoSeq,
+    'To be contacted', '', '', '', '', '', '', ''
+  ]);
+
+  app.repo.invalidate();
+  res.json({ ok: true, added: 1, total: fake.tabs['Driver Requests'].length - 1 });
+});
+
 app.app.listen(process.env.PORT, () => {
   console.log('='.repeat(60));
   console.log('🧪 Driver Requests Console — DEMO (in-memory sheet)');
