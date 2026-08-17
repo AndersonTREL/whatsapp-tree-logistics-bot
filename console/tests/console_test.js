@@ -16,6 +16,7 @@ const LIB = path.join(__dirname, '..', 'lib');
 const owners = require(path.join(LIB, 'owners'));
 const model = require(path.join(LIB, 'model'));
 const sheetsLib = require(path.join(LIB, 'sheets'));
+const clientsLib = require(path.join(LIB, 'clients'));
 const { Repository } = require(path.join(LIB, 'repository'));
 const { FakeSheets } = require('./fake_sheets');
 
@@ -231,6 +232,101 @@ check('with no completion dates the resolve metric is null, never guessed from a
 
 check('the read-only Completed At field is not writable by triage', () => {
   assert.ok(sheetsLib.WRITABLE_OFFICE_FIELDS.indexOf('completedAt') === -1);
+});
+
+// ---------------------------------------------------------------- clients
+
+check('the contract is read from the station prefix', () => {
+  assert.strictEqual(clientsLib.clientOf('DBE2'), 'amazon');
+  assert.strictEqual(clientsLib.clientOf('DBE3'), 'amazon');
+  assert.strictEqual(clientsLib.clientOf('VOI Berlin'), 'voi');
+  assert.strictEqual(clientsLib.clientOf('voi hamburg'), 'voi');
+  assert.strictEqual(clientsLib.clientOf(''), 'other');
+});
+
+check('all 583 historical Amazon rows classify without a backfill', () => {
+  // Every existing row starts DBE, so nothing needs rewriting in the sheet.
+  ['DBE2', 'DBE3'].forEach((station) => {
+    assert.strictEqual(clientsLib.clientOf(station), 'amazon', station);
+    assert.strictEqual(clientsLib.locationOf(station), station);
+  });
+});
+
+check('the location is the city for VOI and the station for Amazon', () => {
+  assert.strictEqual(clientsLib.locationOf('VOI Berlin'), 'Berlin');
+  assert.strictEqual(clientsLib.locationOf('VOI  Hamburg'), 'Hamburg');
+  assert.strictEqual(clientsLib.locationOf('VOI'), '(no city)');
+  assert.strictEqual(clientsLib.locationOf('DBE2'), 'DBE2');
+});
+
+check('VOI has a default owner and Amazon does not', () => {
+  assert.strictEqual(clientsLib.defaultOwnerFor('voi'), 'Anderson Meta');
+  assert.strictEqual(clientsLib.defaultOwnerFor('amazon'), null);
+});
+
+check('the default owner must be someone on the roster', () => {
+  const suggested = clientsLib.defaultOwnerFor('voi');
+  assert.ok(owners.isAssignable(suggested), suggested + ' is not assignable');
+});
+
+check('filter locations come from the data, so a new city needs no deploy', () => {
+  const rows = [
+    { station: 'VOI Berlin' }, { station: 'VOI Berlin' },
+    { station: 'VOI Lübeck' }, { station: 'DBE2' }
+  ];
+  assert.deepStrictEqual(clientsLib.locationsFor(rows, 'voi'), ['Berlin', 'Lübeck']);
+  assert.deepStrictEqual(clientsLib.locationsFor(rows, 'amazon'), ['DBE2']);
+});
+
+// ---------------------------------------------------------------- mixed filtering
+
+const mixed = [
+  { id: 'A1', first: 'Yogesh', last: 'S', station: 'DBE3', status: 'To be contacted', owner: 'Unassigned', age: 30, text: 'papers', category: '', phone: '+491' },
+  { id: 'A2', first: 'Maria', last: 'G', station: 'DBE2', status: 'In Progress', owner: 'Boris Toma', age: 4, text: 'scanner', category: '', phone: '+492' },
+  { id: 'V1', first: 'Elena', last: 'P', station: 'VOI Berlin', status: 'To be contacted', owner: 'Unassigned', age: 12, text: 'payslip', category: '', phone: '+493' },
+  { id: 'V2', first: 'Adil', last: 'S', station: 'VOI Hamburg', status: 'To be contacted', owner: 'Anderson Meta', age: 2, text: 'clothes', category: '', phone: '+494' },
+  { id: 'V3', first: 'Nina', last: 'B', station: 'VOI Berlin', status: 'Completed', owner: 'Anderson Meta', age: 40, text: 'done', category: '', phone: '+495' }
+];
+
+check('filtering by contract separates VOI from Amazon', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { client: 'voi', statusFilter: 'All' }).map((r) => r.id),
+    ['V3', 'V1', 'V2']);
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { client: 'amazon', statusFilter: 'All' }).map((r) => r.id),
+    ['A1', 'A2']);
+});
+
+check('within VOI you can filter down to one city', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { client: 'voi', station: 'Berlin', statusFilter: 'All' }).map((r) => r.id),
+    ['V3', 'V1']);
+});
+
+check('contract and status filters compose', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { client: 'voi', statusFilter: 'Open' }).map((r) => r.id),
+    ['V1', 'V2']);
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { client: 'voi', statusFilter: 'Unassigned' }).map((r) => r.id),
+    ['V1']);
+});
+
+check('no contract filter still shows everything, as before', () => {
+  assert.strictEqual(model.filterRequests(mixed, { statusFilter: 'All' }).length, 5);
+});
+
+check('the dashboard splits the two contracts', () => {
+  const stats = model.dashboardStats(mixed);
+  const byKey = {};
+  stats.byClient.forEach((c) => { byKey[c.client] = c; });
+
+  assert.strictEqual(byKey.amazon.total, 2);
+  assert.strictEqual(byKey.amazon.open, 2);
+  assert.strictEqual(byKey.voi.total, 3);
+  assert.strictEqual(byKey.voi.open, 2);
+  assert.strictEqual(byKey.voi.unassigned, 1, 'only V1 has nobody on it');
+  assert.strictEqual(byKey.amazon.unassigned, 1);
 });
 
 // ---------------------------------------------------------------- write guard

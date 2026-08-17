@@ -290,6 +290,117 @@ async function main() {
       REPLY.askRequest.test(r2.text) && !REPLY.submitted.test(r2.text), r2.text);
   }
 
+  // === Scenario 12: VOI drivers, name and city in one message ===
+  {
+    for (const [label, msg, expect] of [
+      ['city after VOI',  'Elena Petrova VOI Berlin',   { station: 'VOI Berlin', first: 'Elena', last: 'Petrova' }],
+      ['city before VOI', 'Tomas Weber Berlin VOI',     { station: 'VOI Berlin', first: 'Tomas', last: 'Weber' }],
+      ['VOI first',       'VOI Hamburg Nina Braun',     { station: 'VOI Hamburg', first: 'Nina', last: 'Braun' }],
+      ['lowercase',       'ana silva voi kiel',         { station: 'VOI Kiel', first: 'ana', last: 'silva' }],
+      ['city typo',       'Luis Ferreira VOI Flensberg', { station: 'VOI Flensburg', first: 'Luis', last: 'Ferreira' }],
+    ]) {
+      const p = nextPhone();
+      await send(p, 'Hi');
+      const r = await send(p, msg);
+      if (!REPLY.askRequest.test(r.text)) {
+        check(`S12 ${label} accepted`, false, r.text);
+        continue;
+      }
+      await send(p, 'I need my Lohnabrechnung for this month please');
+      const row = saved.find((s) => s.phoneNumber === p);
+      check(`S12 ${label} -> ${expect.station}`,
+        row && row.station === expect.station && row.firstName === expect.first && row.lastName === expect.last,
+        row ? JSON.stringify({ s: row.station, f: row.firstName, l: row.lastName }) : 'not saved');
+    }
+  }
+
+  // === Scenario 13: VOI without a city is asked only for the city ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hello');
+    const r1 = await send(p, 'Diana Ionita VOI');
+    check('S13 VOI with no city asks which city',
+      /which city/i.test(r1.text) && !REPLY.askRequest.test(r1.text), r1.text);
+
+    const r2 = await send(p, 'Rostock');
+    check('S13 a bare city answer is accepted', REPLY.askRequest.test(r2.text), r2.text);
+
+    await send(p, 'I need new work clothes in size L please');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S13 the name given earlier is not lost',
+      row && row.station === 'VOI Rostock' && row.firstName === 'Diana' && row.lastName === 'Ionita',
+      row ? JSON.stringify({ s: row.station, f: row.firstName, l: row.lastName }) : 'not saved');
+  }
+
+  // === Scenario 14: answering the city question with "VOI Berlin" again ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hi');
+    await send(p, 'Qays VOI');
+    const r = await send(p, 'VOI Schwerin');
+    check('S14 repeating "VOI <city>" at the city step still works',
+      REPLY.askRequest.test(r.text), r.text);
+    await send(p, 'Question about my payslip for last month');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S14 station stored as VOI Schwerin',
+      row && row.station === 'VOI Schwerin', row ? row.station : 'not saved');
+  }
+
+  // === Scenario 15: an unknown city still works (no deploy to open a city) ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hi');
+    const r = await send(p, 'Adil Sefer VOI Lübeck');
+    check('S15 an unlisted city is accepted', REPLY.askRequest.test(r.text), r.text);
+    await send(p, 'I need a confirmation letter for my landlord');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S15 unlisted city stored title-cased',
+      row && row.station === 'VOI Lübeck', row ? row.station : 'not saved');
+  }
+
+  // === Scenario 16: Amazon is completely unaffected ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hi');
+    const r = await send(p, 'John Smith DBE2');
+    check('S16 Amazon still accepted unchanged', REPLY.askRequest.test(r.text), r.text);
+    // Deliberately not a scanner request — that correctly triggers a follow-up.
+    await send(p, 'I need login details for Emietarbeiter please');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S16 Amazon station still written as plain DBE2',
+      row && row.station === 'DBE2', row ? row.station : 'not saved');
+  }
+
+  // === Scenario 17: each contract sees its own examples ===
+  {
+    const pA = nextPhone();
+    await send(pA, 'Hi');
+    const amazon = await send(pA, 'Peter Klein DBE3');
+
+    const pV = nextPhone();
+    await send(pV, 'Hi');
+    const voi = await send(pV, 'Mehmet Acar VOI Berlin');
+
+    check('S17 Amazon drivers see the scanner example',
+      /scanner/i.test(amazon.text), amazon.text.slice(0, 200));
+    check('S17 VOI drivers do not see the scanner example',
+      !/scanner/i.test(voi.text), voi.text.slice(0, 200));
+    check('S17 VOI drivers still see the shared payroll example',
+      /Lohnabrechnung/i.test(voi.text), voi.text.slice(0, 200));
+  }
+
+  // === Scenario 18: a VOI driver who leads with their request ===
+  {
+    const p = nextPhone();
+    await send(p, 'I need my Lohnabrechnung for July, it never arrived');
+    await send(p, 'Samir Muranovic VOI');
+    const r = await send(p, 'Hamburg');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S18 the opening request survives the extra city step',
+      !!row && /Lohnabrechnung/i.test(row.request || '') && row.station === 'VOI Hamburg',
+      row ? JSON.stringify({ s: row.station, r: row.request }) : `no row; reply: ${r.text}`);
+  }
+
   // ---- summary ----
   const failed = results.filter((r) => !r.pass);
   process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed\n`);

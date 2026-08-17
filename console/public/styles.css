@@ -130,6 +130,29 @@ select, input, textarea { font-family: inherit; }
 .queue-title h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .queue-count { font-size: 12px; color: var(--muted-2); }
 
+/* Contracts: Amazon and VOI side by side on the dashboard. */
+.cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.client-card {
+  background: var(--card); border: 1px solid var(--border-card); border-radius: 10px;
+  padding: 13px 16px; border-left: 4px solid var(--green-600);
+}
+.client-name { font-size: 14px; font-weight: 700; }
+.client-figures { display: flex; gap: 16px; margin-top: 7px; font-size: 12.5px; color: var(--muted); }
+.client-figures b { font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.client-figures .danger, .client-figures .danger b { color: var(--danger); }
+
+/* The default-owner offer, shown only when nobody is on a request. */
+.suggest-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 8px;
+  background: #F4F8FD; border: 1px solid #D5E3F5;
+}
+.btn-suggest {
+  padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 600;
+  background: #3E7BD6; color: #fff; border: none; white-space: nowrap;
+}
+.btn-suggest:hover { background: #2F62AE; }
+
 /* Sort direction. Oldest-first is the design default (SLA order); newest-first
    is for spotting arrivals. */
 .sort-btn {

@@ -7,6 +7,7 @@
  */
 
 const owners = require('./owners');
+const clients = require('./clients');
 
 // The exact values column H's dropdown offers. Must round-trip unchanged: the
 // bot's normalizeStatusString() and the Apps Script filters depend on them,
@@ -171,8 +172,12 @@ function filterRequests(requests, opts) {
   const statusFilter = (opts && opts.statusFilter) || 'Open';
   const query = String((opts && opts.query) || '').trim().toLowerCase();
 
+  const client = (opts && opts.client) || 'All';
+
   const matched = requests.filter(function (r) {
-    if (station !== 'All' && r.station !== station) return false;
+    // Contract first, then the location within it.
+    if (client !== 'All' && clients.clientOf(r.station) !== client) return false;
+    if (station !== 'All' && clients.locationOf(r.station) !== station) return false;
 
     if (statusFilter === 'Open' && !isOpen(r.status)) return false;
     if (statusFilter === 'Unassigned' && r.owner !== owners.UNASSIGNED) return false;
@@ -230,8 +235,39 @@ function dashboardStats(requests) {
   const byStation = Object.keys(stationCounts)
     .sort(function (a, b) { return stationCounts[b] - stationCounts[a]; })
     .map(function (name) {
-      return { name: name, count: stationCounts[name], pct: pct(stationCounts[name]), color: '#199948' };
+      const config = clients.configOf(clients.clientOf(name));
+      return {
+        name: name,
+        count: stationCounts[name],
+        pct: pct(stationCounts[name]),
+        color: config ? config.color : '#9AA79E'
+      };
     });
+
+  // Per contract: the split that matters now that VOI is a separate business.
+  const byClientMap = {};
+  requests.forEach(function (r) {
+    const key = clients.clientOf(r.station);
+    if (!byClientMap[key]) byClientMap[key] = { open: 0, total: 0, unassigned: 0 };
+    byClientMap[key].total++;
+    if (isOpen(r.status)) {
+      byClientMap[key].open++;
+      if ((r.owner || owners.UNASSIGNED) === owners.UNASSIGNED) byClientMap[key].unassigned++;
+    }
+  });
+  const byClient = Object.keys(byClientMap).map(function (key) {
+    const row = byClientMap[key];
+    const config = clients.configOf(key);
+    return {
+      client: key,
+      label: clients.labelOf(key),
+      color: config ? config.color : '#9AA79E',
+      open: row.open,
+      total: row.total,
+      unassigned: row.unassigned,
+      pct: pct(row.total)
+    };
+  }).sort(function (a, b) { return b.total - a.total; });
 
   // Workload per owner: unassigned first, then most open work.
   const byOwnerMap = {};
@@ -301,6 +337,7 @@ function dashboardStats(requests) {
     },
     statusMix: statusMix,
     byStation: byStation,
+    byClient: byClient,
     byOwner: byOwner,
     aging: aging,
     needsAttention: needsAttention

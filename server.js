@@ -5,6 +5,7 @@ const { MessagingResponse } = require('twilio').twiml;
 require('dotenv').config();
 
 // Import services
+const clients = require('./services/clients');
 const conversationFlow = require('./services/conversationFlow');
 const googleSheets = require('./services/googleSheets');
 const messaging = require('./services/messaging');
@@ -143,12 +144,18 @@ async function startDataCollectionFlow(from, profileName, firstMessage) {
 
 We have your message and it is safe — we just need to know who you are before we send it to the office.
 
-Please reply with your first name, last name, and the station where you work (DBE2, DBE3).`;
+Please reply with your first name, last name, and where you work.
+
+🏢 Amazon: DBE2 or DBE3
+🛴 VOI: VOI and your city, for example "VOI Berlin"`;
   }
 
   return `🌳 Welcome to Tree Logistics Office Support!
 
-We are glad that you reached out! To get started, please provide your first name, last name, and the station where you work (DBE2, DBE3).`;
+We are glad that you reached out! To get started, please tell us your first name, last name, and where you work.
+
+🏢 Amazon: DBE2 or DBE3
+🛴 VOI: VOI and your city, for example "VOI Berlin"`;
 }
 
 // Handle data collection - parse the single message for all 3 pieces of info
@@ -158,20 +165,37 @@ async function handleDataCollection(message, from, data) {
     const parsedData = parseDriverInfo(message);
     
     if (!parsedData.isValid) {
+      // VOI told us who they are but not where. Hold the name and ask only for
+      // the city, rather than making them type everything again.
+      if (parsedData.error === 'voi_city_missing') {
+        conversationFlow.updateFlow(from, {
+          ...data,
+          client: 'voi',
+          firstName: parsedData.firstName,
+          lastName: parsedData.lastName,
+          step: 'voi_city'
+        });
+
+        return `📝 Thanks! Which city do you work in?
+
+For example: ${clients.VOI_CITIES.slice(0, 4).join(', ')}`;
+      }
+
       // Say which piece is missing — "wrong format" alone leaves drivers guessing.
       if (parsedData.error === 'name_incomplete') {
         return `📝 Thanks! We also need your last name.
 
-Please send your first name, last name and station together, for example:
-John Smith DBE2`;
+Please send your first name, last name and where you work together, for example:
+John Smith DBE2   —   or   —   John Smith VOI Berlin`;
       }
 
-      return `📝 We still need your station, so your request reaches the right team.
+      return `📝 We still need to know where you work, so your request reaches the right team.
 
-Please send your first name, last name and station together, for example:
-John Smith DBE2
+Please send it together with your name, for example:
+John Smith DBE2   —   or   —   John Smith VOI Berlin
 
-🏢 Station: DBE2 or DBE3`;
+🏢 Amazon: DBE2 or DBE3
+🛴 VOI: VOI and your city`;
     }
 
     // Now ask for their request/question
@@ -192,23 +216,7 @@ John Smith DBE2
       return await handleRequestCollection(data.pendingRequest, from, identified);
     }
 
-    return `---------
-✅ Perfect! ${parsedData.firstName} ${parsedData.lastName}, from ${parsedData.station} 📍
-
-Now, please tell us what you need help with. 
-
-📝 The more details you provide, the faster we can help you!
-
-Examples:
-• "I need login details for Emietarbeiter"
-• "I need Lohnabrechnung for this month"
-• "My scanner has some issues with GPS"
-• "Can I request vacation from X date to X date?"
-
-💡 Everything that is not an on-the-road issue, you can request here.
-
-What can we help you with?
----------`;
+    return requestPrompt(parsedData.firstName, parsedData.lastName, parsedData.station, parsedData.client);
     
   } catch (error) {
     console.error('Error parsing driver info:', error);
@@ -222,32 +230,105 @@ Please try again.`;
   }
 }
 
-// Parse driver information from a single message
+/** The "what do you need?" message, with the examples for that contract. */
+function requestPrompt(firstName, lastName, station, clientKey) {
+  const config = clients.clientConfig(clientKey);
+
+  return `---------
+✅ Perfect! ${firstName} ${lastName}, from ${station} 📍
+
+Now, please tell us what you need help with. 
+
+📝 The more details you provide, the faster we can help you!
+
+Examples:
+${config.examples.map(function (e) { return '• "' + e + '"'; }).join('\n')}
+
+💡 ${config.closing}
+
+What can we help you with?
+---------`;
+}
+
+/**
+ * Second step for VOI drivers who gave a name but no city. Only the city is
+ * expected here, so a bare "Berlin" is enough.
+ */
+async function handleVoiCity(message, from, data) {
+  const words = String(message || '').trim().split(/\s+/).filter(Boolean);
+
+  // Some drivers answer "VOI Berlin" again rather than just the city.
+  const cityWord = words.find(function (word) {
+    return !clients.isVoiToken(word) && /^\p{L}[\p{L}\-']*$/u.test(word);
+  });
+
+  if (!cityWord) {
+    return `📝 Sorry, we did not catch the city.
+
+Which city do you work in? For example: ${clients.VOI_CITIES.slice(0, 4).join(', ')}`;
+  }
+
+  const city = clients.canonicalCity(cityWord);
+  const station = 'VOI ' + city;
+
+  conversationFlow.updateFlow(from, {
+    ...data,
+    station: station,
+    client: 'voi',
+    step: 'request_collection'
+  });
+
+  if (data.pendingRequest) {
+    console.log(`📌 Submitting held request for ${data.firstName} ${data.lastName} (${station})`);
+    const { step, ...identified } = conversationFlow.getFlowState(from) || {};
+    return await handleRequestCollection(data.pendingRequest, from, identified);
+  }
+
+  return requestPrompt(data.firstName, data.lastName, station, 'voi');
+}
+
+/**
+ * Parse driver information from a single message.
+ *
+ * Handles both contracts: "John Smith DBE2" for Amazon and "John Smith VOI Berlin"
+ * for VOI. Drivers write the station before, after and in the middle of their
+ * name, so it is found wherever it is — taking only the words before it used to
+ * drop the surname of anyone who wrote "Luis DBE3 Ferreira".
+ */
 function parseDriverInfo(message) {
   const words = (message || '').trim().split(/\s+/).filter(Boolean);
 
-  // Drivers write the station before, after and in the middle of their name, so
-  // find it wherever it is rather than assuming it comes last. Taking only the
-  // words before it used to drop the surname of anyone who wrote
-  // "Luis DBE3 Ferreira".
-  const stationIndex = words.findIndex(word => /^(DBE2|DBE3)[.,;:]?$/i.test(word));
-
-  if (stationIndex === -1) {
+  const detected = clients.detectClient(words);
+  if (!detected) {
     return { isValid: false, error: 'station_missing' };
   }
 
-  const station = words[stationIndex].toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const nameWords = words.filter((_, index) => index !== stationIndex);
+  const nameWords = words.filter(function (_, index) {
+    return detected.usedIndexes.indexOf(index) === -1;
+  });
+
+  // VOI without a city: keep the name so we only have to ask for the city.
+  if (detected.needsCity) {
+    return {
+      isValid: false,
+      error: 'voi_city_missing',
+      client: 'voi',
+      firstName: nameWords[0] || '',
+      lastName: nameWords.slice(1).join(' ')
+    };
+  }
 
   if (nameWords.length < 2) {
-    return { isValid: false, error: 'name_incomplete' };
+    return { isValid: false, error: 'name_incomplete', client: detected.client };
   }
 
   return {
     isValid: true,
     firstName: nameWords[0],
     lastName: nameWords.slice(1).join(' '),
-    station: station
+    station: detected.station,
+    client: detected.client,
+    location: detected.location
   };
 }
 
@@ -511,6 +592,10 @@ async function handleActiveFlow(flowState, message, from, profileName) {
 
   if (step === 'data_collection') {
     return await handleDataCollection(message, from, data);
+  }
+
+  if (step === 'voi_city') {
+    return await handleVoiCity(message, from, data);
   }
 
   if (step === 'request_collection') {

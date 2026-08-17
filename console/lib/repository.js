@@ -8,6 +8,7 @@
 
 const model = require('./model');
 const owners = require('./owners');
+const clients = require('./clients');
 const { OFFICE_FIELDS } = require('./sheets');
 
 const DEFAULT_CACHE_MS = 15000;
@@ -91,6 +92,8 @@ class Repository {
         first: String(row[1] == null ? '' : row[1]).trim(),
         last: String(row[2] == null ? '' : row[2]).trim(),
         station: String(row[3] == null ? '' : row[3]).trim(),
+        client: clients.clientOf(row[3]),
+        location: clients.locationOf(row[3]),
         text: String(row[4] == null ? '' : row[4]),
         phone: String(row[6] == null ? '' : row[6]).trim(),
         status: String(row[7] == null ? '' : row[7]).trim(),

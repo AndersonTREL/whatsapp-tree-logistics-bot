@@ -24,6 +24,7 @@ const path = require('path');
 const { SheetsClient } = require('./lib/sheets');
 const { Repository } = require('./lib/repository');
 const owners = require('./lib/owners');
+const clients = require('./lib/clients');
 const model = require('./lib/model');
 
 const VERSION = '1.0.0-console';
@@ -179,7 +180,8 @@ app.get('/api/state', requireAuth, async function (req, res) {
         contactMethods: model.CONTACT_METHODS,
         owners: owners.assignableOwners(),
         legacyOwners: owners.LEGACY_OWNERS,
-        teams: owners.TEAMS
+        teams: owners.TEAMS,
+        clients: clients.CLIENTS
       }
     });
   } catch (err) {

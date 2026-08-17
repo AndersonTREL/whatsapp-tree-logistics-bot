@@ -28,7 +28,8 @@
     dashboard: null,
     syncedAt: null,
     selectedId: null,
-    station: 'All',
+    client: 'All',          // contract: All | amazon | voi
+    station: 'All',         // location within the contract
     statusFilter: 'Open',
     query: '',
     draft: '',
@@ -117,6 +118,41 @@
       });
   }
 
+  // Mirrors lib/clients.js — the station prefix is the contract.
+  function clientOf(station) {
+    var value = String(station || '').trim().toUpperCase();
+    if (value.indexOf('VOI') === 0) return 'voi';
+    if (value.indexOf('DBE') === 0) return 'amazon';
+    return 'other';
+  }
+
+  function locationOf(station) {
+    var value = String(station || '').trim();
+    if (clientOf(value) === 'voi') {
+      var rest = value.replace(/^voi\s*/i, '').trim();
+      return rest || '(no city)';
+    }
+    return value || '(none)';
+  }
+
+  function clientConfig(key) {
+    return (state.options && state.options.clients || []).find(function (c) { return c.key === key; }) || null;
+  }
+
+  /** Locations present in the data for the selected contract. */
+  function locationsForFilter() {
+    var counts = {};
+    state.requests.forEach(function (r) {
+      if (state.client !== 'All' && clientOf(r.station) !== state.client) return;
+      var loc = locationOf(r.station);
+      counts[loc] = (counts[loc] || 0) + 1;
+    });
+    return Object.keys(counts).sort(function (a, b) {
+      if (counts[b] !== counts[a]) return counts[b] - counts[a];
+      return a.localeCompare(b);
+    });
+  }
+
   function newCount() { return Object.keys(state.newIds).length; }
 
   /**
@@ -164,7 +200,8 @@
 
     var rows = state.requests.filter(function (r) {
       if (state.onlyNew && !state.newIds[r.id]) return false;
-      if (state.station !== 'All' && r.station !== state.station) return false;
+      if (state.client !== 'All' && clientOf(r.station) !== state.client) return false;
+      if (state.station !== 'All' && locationOf(r.station) !== state.station) return false;
 
       if (state.statusFilter === 'Open' && !isOpen(r.status)) return false;
       if (state.statusFilter === 'Unassigned' && r.owner !== 'Unassigned') return false;
@@ -247,7 +284,8 @@
     var rows = filtered();
     var openTotal = state.requests.filter(function (r) { return isOpen(r.status); }).length;
     var chips = ['Open', 'Unassigned', 'To be contacted', 'In Progress', 'All'];
-    var stations = ['All', 'DBE2', 'DBE3'];
+    var clientList = (state.options && state.options.clients) || [];
+    var locations = locationsForFilter();
 
     var list = rows.length === 0
       ? '<div class="queue-empty">Nothing matches these filters.</div>'
@@ -258,7 +296,9 @@
             ' style="border-left-color:' + c.bar + '">' +
             '<div class="row-line">' +
               '<span class="row-name">' + esc((r.first + ' ' + r.last).trim() || 'Unknown driver') + '</span>' +
-              '<span class="station-tag">' + esc(r.station || '—') + '</span>' +
+              '<span class="station-tag"' +
+                (clientOf(r.station) === 'voi' ? ' style="background:#E4EDFA;color:#1B4B8F"' : '') + '>' +
+                esc(r.station || '—') + '</span>' +
               (state.newIds[r.id] ? '<span class="new-tag">NEW</span>' : '') +
               '<span class="row-age" style="color:' + ageColor(r.age) + '">' +
                 (r.age == null ? '—' : r.age + 'd open') + '</span>' +
@@ -296,12 +336,23 @@
             : '') +
           '<input class="search" id="search" placeholder="Search driver, request ID, text…" value="' +
             esc(state.query) + '">' +
-          '<div class="segmented">' +
-            stations.map(function (s) {
-              return '<button data-station="' + s + '"' + (state.station === s ? ' class="on"' : '') + '>' +
-                (s === 'All' ? 'All stations' : s) + '</button>';
+          '<div class="segmented" style="grid-template-columns:repeat(' + (clientList.length + 1) + ',1fr)">' +
+            ('<button data-client="All"' + (state.client === 'All' ? ' class="on"' : '') + '>All</button>') +
+            clientList.map(function (c) {
+              return '<button data-client="' + esc(c.key) + '"' +
+                (state.client === c.key ? ' class="on"' : '') + '>' + esc(c.short || c.label) + '</button>';
             }).join('') +
           '</div>' +
+          (locations.length > 1
+            ? '<div class="chips">' +
+              ('<button class="chip' + (state.station === 'All' ? ' on' : '') + '" data-station="All">' +
+                (state.client === 'voi' ? 'All cities' : 'All') + '</button>') +
+              locations.map(function (loc) {
+                return '<button class="chip' + (state.station === loc ? ' on' : '') +
+                  '" data-station="' + esc(loc) + '">' + esc(loc) + '</button>';
+              }).join('') +
+              '</div>'
+            : '') +
           '<div class="chips">' +
             chips.map(function (c) {
               return '<button class="chip' + (state.statusFilter === c ? ' on' : '') +
@@ -367,7 +418,10 @@
           '<div>' +
             '<div class="detail-headline">' +
               '<h1>' + esc((r.first + ' ' + r.last).trim() || 'Unknown driver') + '</h1>' +
-              '<span class="station-tag" style="font-size:11px;background:#E7EEE9;color:#2C5238">' +
+              '<span class="station-tag" style="font-size:11px;' +
+                (clientOf(r.station) === 'voi'
+                  ? 'background:#E4EDFA;color:#1B4B8F'
+                  : 'background:#E7EEE9;color:#2C5238') + '">' +
                 esc(r.station || '—') + '</span>' +
               statusPill(r.status, '11.5px') +
             '</div>' +
@@ -399,6 +453,22 @@
             selectMarkup('f-priority', 'Priority', r.priority, o.priorities || [], true) +
             selectMarkup('f-category', 'Category', r.category, o.categories || [], true) +
           '</div>' +
+          (function () {
+            // VOI requests come to Anderson unless someone else takes them. Offered
+            // as one click rather than written automatically, so a row nobody has
+            // touched still reads as Unassigned.
+            var config = clientConfig(clientOf(r.station));
+            var suggested = config && config.defaultOwner;
+            if (!suggested || r.owner !== 'Unassigned') return '';
+
+            return '<div class="suggest-row">' +
+              '<span class="contact-label">Nobody on this yet</span>' +
+              '<button class="btn-suggest" data-assign="' + esc(suggested) + '">' +
+                'Assign to ' + esc(suggested) + '</button>' +
+              '<span class="contact-note">' + esc(config.label) + ' requests default to ' +
+                esc(suggested) + '</span>' +
+            '</div>';
+          })() +
           '<div class="contact-row">' +
             '<span class="contact-label">Driver contacted via</span>' +
             (o.contactMethods || []).map(function (m) {
@@ -514,6 +584,22 @@
             '</div>';
           }).join('') +
         '</div>' +
+
+        (s.byClient && s.byClient.length > 1
+          ? '<div class="cards-row">' +
+            s.byClient.map(function (c) {
+              return '<div class="client-card" style="border-left-color:' + c.color + '">' +
+                '<div class="client-name">' + esc(c.label) + '</div>' +
+                '<div class="client-figures">' +
+                  '<span><b>' + c.open + '</b> open</span>' +
+                  '<span><b>' + c.total + '</b> total</span>' +
+                  '<span' + (c.unassigned > 0 ? ' class="danger"' : '') + '><b>' + c.unassigned +
+                    '</b> unassigned</span>' +
+                '</div>' +
+              '</div>';
+            }).join('') +
+            '</div>'
+          : '') +
 
         '<div class="band">' +
           '<div class="card pad">' +
@@ -838,6 +924,14 @@
       render();
     };
 
+    root.querySelectorAll('[data-client]').forEach(function (el) {
+      el.onclick = function () {
+        state.client = el.getAttribute('data-client');
+        state.station = 'All'; // a DBE2 filter means nothing once VOI is selected
+        render();
+      };
+    });
+
     root.querySelectorAll('[data-station]').forEach(function (el) {
       el.onclick = function () { state.station = el.getAttribute('data-station'); render(); };
     });
@@ -872,6 +966,10 @@
         patch[el.getAttribute('data-field')] = el.value;
         saveTriage(patch);
       };
+    });
+
+    root.querySelectorAll('[data-assign]').forEach(function (el) {
+      el.onclick = function () { saveTriage({ owner: el.getAttribute('data-assign') }); };
     });
 
     root.querySelectorAll('[data-contact]').forEach(function (el) {
