@@ -27,7 +27,7 @@ const owners = require('./lib/owners');
 const clients = require('./lib/clients');
 const model = require('./lib/model');
 
-const VERSION = '1.1.0-console-voi';
+const VERSION = '1.2.0-owner-filter';
 
 const PORT = process.env.PORT || 4000;
 const ACCESS_CODE = process.env.CONSOLE_ACCESS_CODE || '';

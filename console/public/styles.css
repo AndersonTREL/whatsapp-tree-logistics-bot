@@ -130,6 +130,18 @@ select, input, textarea { font-family: inherit; }
 .queue-title h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .queue-count { font-size: 12px; color: var(--muted-2); }
 
+/* Owner filter: "Assigned to me" plus a picker for anyone else. */
+.owner-row { display: flex; gap: 6px; align-items: center; }
+.mine-chip { flex: none; }
+.mine-chip:disabled { opacity: .5; cursor: not-allowed; }
+.owner-select {
+  flex: 1; min-width: 0; height: 26px;
+  border: 1px solid var(--border-input); border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: #4C5C52;
+  background: #fff; padding: 0 8px;
+}
+.owner-select:focus { outline: none; border-color: var(--green-600); }
+
 /* Contracts: Amazon and VOI side by side on the dashboard. */
 .cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .client-card {

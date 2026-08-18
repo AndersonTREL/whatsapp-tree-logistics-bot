@@ -312,6 +312,38 @@ check('contract and status filters compose', () => {
     ['V1']);
 });
 
+check('filtering by owner shows only that person\'s work', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { owner: 'Anderson Meta', statusFilter: 'All' }).map((r) => r.id),
+    ['V3', 'V2']);
+});
+
+check('owner composes with status, so "my open requests" works', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { owner: 'Anderson Meta', statusFilter: 'Open' }).map((r) => r.id),
+    ['V2']);
+});
+
+check('owner composes with contract too', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { owner: 'Boris Toma', client: 'amazon', statusFilter: 'All' }).map((r) => r.id),
+    ['A2']);
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { owner: 'Boris Toma', client: 'voi', statusFilter: 'All' }).map((r) => r.id),
+    []);
+});
+
+check('Unassigned is selectable as an owner', () => {
+  assert.deepStrictEqual(
+    model.filterRequests(mixed, { owner: 'Unassigned', statusFilter: 'All' }).map((r) => r.id),
+    ['A1', 'V1']);
+});
+
+check('no owner filter leaves the queue untouched', () => {
+  assert.strictEqual(model.filterRequests(mixed, { statusFilter: 'All' }).length, 5);
+  assert.strictEqual(model.filterRequests(mixed, { owner: 'All', statusFilter: 'All' }).length, 5);
+});
+
 check('no contract filter still shows everything, as before', () => {
   assert.strictEqual(model.filterRequests(mixed, { statusFilter: 'All' }).length, 5);
 });

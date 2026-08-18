@@ -173,8 +173,12 @@ function filterRequests(requests, opts) {
   const query = String((opts && opts.query) || '').trim().toLowerCase();
 
   const client = (opts && opts.client) || 'All';
+  const owner = (opts && opts.owner) || 'All';
 
   const matched = requests.filter(function (r) {
+    // Owner is independent of status, so "my open requests" composes naturally.
+    if (owner !== 'All' && (r.owner || owners.UNASSIGNED) !== owner) return false;
+
     // Contract first, then the location within it.
     if (client !== 'All' && clients.clientOf(r.station) !== client) return false;
     if (station !== 'All' && clients.locationOf(r.station) !== station) return false;

@@ -31,6 +31,7 @@
     client: 'All',          // contract: All | amazon | voi
     station: 'All',         // location within the contract
     statusFilter: 'Open',
+    owner: 'All',           // 'All' | 'me' | a specific owner name
     query: '',
     draft: '',
     density: 'comfortable',
@@ -153,6 +154,28 @@
     });
   }
 
+  /** Owners that actually appear in the data, most work first. */
+  function ownersInData() {
+    var counts = {};
+    state.requests.forEach(function (r) {
+      var name = r.owner || 'Unassigned';
+      if (name === 'Unassigned') return;
+      counts[name] = (counts[name] || 0) + 1;
+    });
+    return Object.keys(counts).sort(function (a, b) {
+      if (counts[b] !== counts[a]) return counts[b] - counts[a];
+      return a.localeCompare(b);
+    });
+  }
+
+  /** How many open requests the signed-in person is carrying. */
+  function myOpenCount() {
+    if (!state.actor) return 0;
+    return state.requests.filter(function (r) {
+      return isOpen(r.status) && r.owner === state.actor.name;
+    }).length;
+  }
+
   function newCount() { return Object.keys(state.newIds).length; }
 
   /**
@@ -202,6 +225,11 @@
       if (state.onlyNew && !state.newIds[r.id]) return false;
       if (state.client !== 'All' && clientOf(r.station) !== state.client) return false;
       if (state.station !== 'All' && locationOf(r.station) !== state.station) return false;
+
+      // Owner filter, independent of status: "my open requests" is the common case.
+      if (state.owner === 'me') {
+        if (!state.actor || r.owner !== state.actor.name) return false;
+      } else if (state.owner !== 'All' && r.owner !== state.owner) return false;
 
       if (state.statusFilter === 'Open' && !isOpen(r.status)) return false;
       if (state.statusFilter === 'Unassigned' && r.owner !== 'Unassigned') return false;
@@ -334,6 +362,20 @@
               (state.onlyNew ? ' — showing only these' : '') +
               '</button>'
             : '') +
+          '<div class="owner-row">' +
+            '<button class="chip mine-chip' + (state.owner === 'me' ? ' on' : '') + '" id="mineChip"' +
+              (state.actor ? '' : ' disabled title="Choose who you are first"') + '>' +
+              'Assigned to me' + (myOpenCount() ? ' · ' + myOpenCount() : '') +
+            '</button>' +
+            '<select class="owner-select" id="ownerSelect" title="Filter by owner">' +
+              '<option value="All"' + (state.owner === 'All' ? ' selected' : '') + '>Everyone</option>' +
+              '<option value="Unassigned"' + (state.owner === 'Unassigned' ? ' selected' : '') + '>Unassigned</option>' +
+              ownersInData().map(function (name) {
+                return '<option value="' + esc(name) + '"' +
+                  (state.owner === name ? ' selected' : '') + '>' + esc(name) + '</option>';
+              }).join('') +
+            '</select>' +
+          '</div>' +
           '<input class="search" id="search" placeholder="Search driver, request ID, text…" value="' +
             esc(state.query) + '">' +
           '<div class="segmented" style="grid-template-columns:repeat(' + (clientList.length + 1) + ',1fr)">' +
@@ -921,6 +963,18 @@
       state.onlyNew = !state.onlyNew;
       // Showing the arrivals is most useful newest-first.
       if (state.onlyNew) state.sort = 'newest';
+      render();
+    };
+
+    var mineChip = document.getElementById('mineChip');
+    if (mineChip) mineChip.onclick = function () {
+      state.owner = state.owner === 'me' ? 'All' : 'me';
+      render();
+    };
+
+    var ownerSelect = document.getElementById('ownerSelect');
+    if (ownerSelect) ownerSelect.onchange = function () {
+      state.owner = ownerSelect.value;
       render();
     };
 
