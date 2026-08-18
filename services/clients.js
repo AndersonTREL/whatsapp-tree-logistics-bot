@@ -132,6 +132,44 @@ function isAmazonStationToken(word) {
   return /^(DBE2|DBE3)[.,;:]?$/i.test(word);
 }
 
+/**
+ * Anything that looks like somebody reaching for an Amazon station, including
+ * the malformed spellings: "DBE", "DBE 3", "DBE-3", "DBE5".
+ *
+ * This matters because DBE2 and DBE3 are BERLIN stations. An Amazon driver who
+ * writes "DBE 3 Berlin" must never be read as VOI just because the station was
+ * typed with a space — the city alone is not evidence of the contract.
+ */
+function hasAmazonHint(word) {
+  return /^DBE[\s.-]*\d*[.,;:]?$/i.test(String(word || '').trim());
+}
+
+/**
+ * Joins a station that the driver split across two words, so "DBE 3" reads the
+ * same as "DBE3". Returns tokens carrying the original indexes, so the driver's
+ * name is still assembled from exactly the words we did not consume.
+ */
+function mergeStationTokens(words) {
+  const tokens = [];
+
+  for (let i = 0; i < words.length; i++) {
+    const current = String(words[i]);
+    const next = i + 1 < words.length ? String(words[i + 1]) : '';
+
+    // "DBE" followed by a bare 2 or 3.
+    if (/^DBE[.-]?$/i.test(current) && /^[23][.,;:]?$/.test(next)) {
+      tokens.push({ text: 'DBE' + next.replace(/\D/g, ''), indexes: [i, i + 1] });
+      i++;
+      continue;
+    }
+
+    // "DBE-3" / "DBE.3" as one word.
+    tokens.push({ text: current.replace(/^(DBE)[.-](\d)$/i, '$1$2'), indexes: [i] });
+  }
+
+  return tokens;
+}
+
 function isVoiToken(word) {
   return /^(VOI|VOI'?S)[.,;:]?$/i.test(word);
 }
@@ -152,20 +190,45 @@ function looksLikeNoise(word) {
  * }}
  */
 function detectClient(words) {
-  const amazonIndex = words.findIndex(isAmazonStationToken);
-  if (amazonIndex !== -1) {
-    const station = words[amazonIndex].toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // "DBE 3" and "DBE-3" mean the same as "DBE3".
+  const tokens = mergeStationTokens(words);
+
+  const amazonToken = tokens.find(function (t) { return isAmazonStationToken(t.text); });
+  if (amazonToken) {
+    const station = amazonToken.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const used = amazonToken.indexes.slice();
+
+    // DBE2 and DBE3 are Berlin stations, so an Amazon driver may well add
+    // "Berlin". Consume it rather than leaving it stuck on the end of their
+    // surname — but only while two words remain for the actual name.
+    const cityIndex = words.findIndex(function (w, i) {
+      if (used.indexOf(i) !== -1) return false;
+      const bare = String(w).replace(/[.,;:]$/, '').toLowerCase();
+      return VOI_CITIES.some(function (c) { return c.toLowerCase() === bare; });
+    });
+    if (cityIndex !== -1 && words.length - used.length - 1 >= 2) used.push(cityIndex);
+
     return {
       client: 'amazon',
       location: station,
       station: station,
-      usedIndexes: [amazonIndex],
+      usedIndexes: used,
       needsCity: false
     };
   }
 
   const voiIndex = words.findIndex(isVoiToken);
-  if (voiIndex === -1) return detectCityOnly(words);
+
+  if (voiIndex === -1) {
+    // Someone reaching for a station but not landing on one — "DBE", "DBE 5".
+    // Guessing VOI off a city here is how an Amazon driver at a Berlin station
+    // ends up filed under the wrong contract. Ask instead.
+    if (tokens.some(function (t) { return hasAmazonHint(t.text); })) {
+      return { client: null, station: null, usedIndexes: [], needsCity: false, unclearStation: true };
+    }
+
+    return detectCityOnly(words);
+  }
 
   // The city is usually right after VOI, but drivers also write "Berlin VOI".
   const candidates = [voiIndex + 1, voiIndex - 1];
@@ -260,6 +323,8 @@ module.exports = {
   canonicalCity,
   detectClient,
   detectCityOnly,
+  hasAmazonHint,
+  mergeStationTokens,
   clientOfStation,
   clientConfig,
   titleCase,

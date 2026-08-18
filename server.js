@@ -12,7 +12,7 @@ const messaging = require('./services/messaging');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.2.0-voi-and-amazon';
+const VERSION = '2.2.1-station-spacing-fix';
 
 // Reject webhooks that Twilio did not sign. Off by default: the signed URL has
 // to be rebuilt exactly as Twilio saw it, and behind Railway's proxy a wrong
@@ -179,6 +179,13 @@ async function handleDataCollection(message, from, data) {
 For example: ${clients.VOI_CITIES.slice(0, 4).join(', ')}`;
       }
 
+      if (parsedData.error === 'station_unclear') {
+        return `📝 Sorry, we could not read your station.
+
+Please send your name together with *DBE2* or *DBE3*, for example:
+John Smith DBE2`;
+      }
+
       // Say which piece is missing — "wrong format" alone leaves drivers guessing.
       if (parsedData.error === 'name_incomplete') {
         return `📝 Thanks! We also need your last name.
@@ -296,6 +303,12 @@ function parseDriverInfo(message) {
   const detected = clients.detectClient(words);
   if (!detected) {
     return { isValid: false, error: 'station_missing' };
+  }
+
+  // They reached for a station but we could not read it. Say so, rather than
+  // repeating the generic prompt or guessing the other contract.
+  if (detected.unclearStation) {
+    return { isValid: false, error: 'station_unclear' };
   }
 
   const nameWords = words.filter(function (_, index) {

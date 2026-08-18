@@ -532,6 +532,50 @@ async function main() {
       row && row.station === 'DBE3', row ? row.station : 'not saved');
   }
 
+  // === Scenario 25: a station typed with a space is still Amazon ===
+  // Regression: "Muhammad junaid Rashid DBE 3 Berlin" was filed as VOI Berlin.
+  // DBE2/DBE3 are Berlin stations, so a city name is NOT evidence of contract.
+  {
+    for (const [label, msg, station, name] of [
+      ['space in station',      'Muhammad Junaid DBE 3',          'DBE3', 'Muhammad Junaid'],
+      ['space + city',          'Muhammad Junaid DBE 3 Berlin',   'DBE3', 'Muhammad Junaid'],
+      ['hyphen in station',     'Peter Klein DBE-2',              'DBE2', 'Peter Klein'],
+      ['lowercase with space',  'anna meier dbe 3',               'DBE3', 'anna meier'],
+      ['station and city',      'Harnoor Singh DBE3 Berlin',      'DBE3', 'Harnoor Singh'],
+      ['city before station',   'Nils Weber Hamburg DBE2',        'DBE2', 'Nils Weber'],
+    ]) {
+      const p = nextPhone();
+      await send(p, 'Hi');
+      const r = await send(p, msg);
+      if (!REPLY.askRequest.test(r.text)) {
+        check(`S25 ${label} accepted`, false, r.text);
+        continue;
+      }
+      await send(p, 'I need login details for the portal please');
+      const row = saved.find((s) => s.phoneNumber === p);
+      check(`S25 ${label} -> ${station}`,
+        row && row.station === station, row ? row.station : 'not saved');
+      check(`S25 ${label} keeps the city out of the name`,
+        row && (row.firstName + ' ' + row.lastName) === name,
+        row ? row.firstName + ' ' + row.lastName : 'not saved');
+    }
+  }
+
+  // === Scenario 26: an unreadable station is re-asked, never guessed as VOI ===
+  {
+    const p = nextPhone();
+    await send(p, 'Hi');
+    const r = await send(p, 'Peter Klein DBE Berlin');
+    check('S26 a broken station is not silently filed as VOI',
+      /could not read your station/i.test(r.text) && !REPLY.askRequest.test(r.text), r.text);
+
+    const r2 = await send(p, 'Peter Klein DBE2');
+    check('S26 and the correction is accepted', REPLY.askRequest.test(r2.text), r2.text);
+    await send(p, 'I need login details for the portal please');
+    const row = saved.find((s) => s.phoneNumber === p);
+    check('S26 stored as Amazon', row && row.station === 'DBE2', row ? row.station : 'not saved');
+  }
+
   // ---- summary ----
   const failed = results.filter((r) => !r.pass);
   process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed\n`);
