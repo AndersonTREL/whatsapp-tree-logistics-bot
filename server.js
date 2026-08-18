@@ -12,7 +12,7 @@ const messaging = require('./services/messaging');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const VERSION = '2.1.0-capture-first-message';
+const VERSION = '2.2.0-voi-and-amazon';
 
 // Reject webhooks that Twilio did not sign. Off by default: the signed URL has
 // to be rebuilt exactly as Twilio saw it, and behind Railway's proxy a wrong
